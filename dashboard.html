@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plataforma SDR Inteligente</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.app = null;
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+        window.isFirebaseReady = false;
+
+      
+    </script>
+
+    <style>
+    body {
+        font-family: 'Inter', sans-serif;
+        background-color: #e8ff3e;
+    }
+    @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+    }
+    .qualidade-baixa { color: #f44336; }
+    .qualidade-media { color: #ff9800; }
+    .qualidade-alta { color: #22c55e; }
+    .qualidade-baixa-bg { background-color: #fca5a5; }
+    .qualidade-media-bg { background-color: #fcd34d; }
+    .qualidade-alta-bg { background-color: #86efac; }
+    #content-lead-simulator {
+        display: block !important;
+    }
+</style>
+
+</head>
+
+<body class="bg-lime-200 min-h-screen flex flex-col items-center justify-center p-4 sm:p-8">
+
+    <div class="bg-white p-6 sm:p-10 rounded-3xl shadow-2xl max-w-6xl w-full">
+        <img src="https://gobocred.com/images/logo.png" alt="Logo da GoboCred" class="mx-auto h-20 w-auto mb-4">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-900 text-center mb-2">Plataforma SDR Inteligente</h1>
+        <p class="text-gray-500 text-center mb-4 max-w-lg mx-auto">
+            Central de controlo para URA, SDR IA, simulação de roteiros bancários e análise de clientes.
+        </p>
+        <div id="userIdDisplay" class="text-gray-400 text-xs text-center mb-8">ID do Usuário: Carregando...</div>
+
+        <div class="w-full">
+            <div class="border-b border-gray-200">
+                <nav class="-mb-px flex space-x-8 overflow-x-auto" aria-label="Tabs">
+                    <button id="tab-dashboard" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-blue-600 border-blue-600 whitespace-nowrap">
+                        <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 00-1 1v2a1 1 0 102 0V4a1 1 0 00-1-1zM5 9a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM15 9a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM3 15a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM17 15a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1z"></path></svg>
+                        <span>Dashboard URA</span>
+                    </button>
+                    <button id="tab-sdr" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                        <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-2 2a1 1 0 100 2h4a1 1 0 100-2h-4z" clip-rule="evenodd" /></svg>
+                        <span>SDR IA</span>
+                    </button>
+                    <button id="tab-simulator" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                        <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M13 14a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1h-2a1 1 0 01-1-1v-2zM9 8a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1h-2a1 1 0 01-1-1V8zM5 2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1H6a1 1 0 01-1-1V2z"></path></svg>
+                        <span>Simulador de Roteiros</span>
+                    </button>
+                    <button id="tab-clients" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                        <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>
+                        <span>Análise de Clientes</span>
+                    </button>
+                    <button id="tab-lead-simulator" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                        <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0V9a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5 3a1 1 0 100 2h1a1 1 0 100-2H5zm0 6a1 1 0 100 2h1a1 1 0 100-2H5zm0 6a1 1 0 100 2h1a1 1 0 100-2H5zm10-9a1 1 0 011 1v1a1 1 0 11-2 0V7a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1z" clip-rule="evenodd" /></svg>
+                        <span>Simulador</span>
+                    </button>
+                </nav>
+            </div>
+
+            <div id="content-dashboard" class="mt-8">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="flex flex-col gap-6">
+                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner flex flex-col items-start">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">Métricas Chave</h2>
+                            <div class="w-full grid grid-cols-3 gap-4 text-center">
+                                <div class="bg-blue-100 p-4 rounded-xl shadow-sm">
+                                    <span id="totalCallsMetric" class="block text-2xl font-bold text-blue-800">0</span>
+                                    <span class="text-sm text-blue-700">Total de Chamadas</span>
+                                </div>
+                                <div class="bg-emerald-100 p-4 rounded-xl shadow-sm">
+                                    <span id="answeredCallsMetric" class="block text-2xl font-bold text-emerald-800">0</span>
+                                    <span class="text-sm text-emerald-700">Atendidas</span>
+                                </div>
+                                <div class="bg-rose-100 p-4 rounded-xl shadow-sm">
+                                    <span id="unansweredCallsMetric" class="block text-2xl font-bold text-rose-800">0</span>
+                                    <span class="text-sm text-rose-700">Não Atendidas</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-blue-50 p-6 rounded-2xl shadow-inner">
+                            <h2 class="text-xl font-semibold text-blue-900 mb-4">Carregar Lista de Leads</h2>
+                            <form id="uploadForm" class="flex flex-col sm:flex-row items-center justify-center gap-4">
+    <label for="csv_file" id="fileLabel" class="flex-1 cursor-pointer bg-blue-100 hover:bg-blue-200 transition duration-300 text-blue-700 px-4 py-3 rounded-xl font-medium shadow-sm">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M.5 4a.5.5 0 0 1 .5-.5h.5a.5.5 0 0 1 .5.5V13a.5.5 0 0 1-1 0V4z" clip-rule="evenodd" />
+        </svg>
+        Escolher Arquivo CSV/XLS
+        <input type="file" id="csv_file" name="csv_file" class="hidden" accept=".csv, .xls, .xlsx">
+    </label>
+    <button type="submit" id="uploadBtn" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
+        Carregar Leads
+    </button>
+</form>
+<p id="uploadStatus" class="mt-4 text-sm text-blue-600 font-semibold hidden animate-pulse"></p>
+                            
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-6">
+                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">Estatísticas da Campanha</h2>
+                            <canvas id="myChart" class="w-full h-64"></canvas>
+                        </div>
+                        <div class="bg-emerald-50 p-6 rounded-2xl shadow-inner">
+                            <h2 class="text-xl font-semibold text-emerald-900 mb-4">Gerir Campanha</h2>
+                            <div class="flex items-center justify-center gap-6">
+                                <button id="iniciarBtn" class="bg-emerald-500 hover:bg-emerald-600 transition duration-300 text-white px-8 py-4 rounded-xl font-bold shadow-lg transform hover:scale-105 active:scale-95">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+                                    </svg>
+                                    Iniciar
+                                </button>
+                                <button id="pararBtn" class="bg-rose-500 hover:bg-rose-600 transition duration-300 text-white px-8 py-4 rounded-xl font-bold shadow-lg transform hover:scale-105 active:scale-95">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                    </svg>
+                                    Parar
+                                </button>
+                            </div>
+                        </div>
+                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner text-left">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">Log de Status</h2>
+                            <p id="statusMessage" class="text-gray-600 text-sm italic">
+                                Aguardando as suas ações.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="content-sdr" class="mt-8 hidden">
+                <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">Módulo SDR IA para Correspondentes Bancários</h2>
+                    <p class="text-gray-500 mb-6 text-center">
+                        Crie roteiros de chamadas personalizados para os seus leads com base em inteligência artificial.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div>
+                            <form id="sdrForm" class="flex flex-col gap-4">
+                                <div class="flex flex-col">
+                                    <label for="leadName" class="text-sm font-medium text-gray-700">Nome do Lead:</label>
+                                    <input type="text" id="leadName" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-blue-200" placeholder="Ex: João Silva">
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="productType" class="text-sm font-medium text-gray-700">Tipo de Produto:</label>
+                                    <select id="productType" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-blue-200">
+                                        <option value="">Selecione...</option>
+                                        <option value="consignado">Crédito Consignado</option>
+                                        <option value="financiamento_imovel">Financiamento Imobiliário</option>
+                                        <option value="financiamento_veiculo">Financiamento de Veículo</option>
+                                        <option value="credito_pessoal">Crédito Pessoal</option>
+                                    </select>
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="leadStatus" class="text-sm font-medium text-gray-700">Status do Lead:</label>
+                                    <select id="leadStatus" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-blue-200">
+                                        <option value="">Selecione...</option>
+                                        <option value="quente">Quente (já demonstrou interesse)</option>
+                                        <option value="morno">Morno (interagiu, mas não confirmou)</option>
+                                        <option value="frio">Frio (novo contacto)</option>
+                                    </select>
+                                </div>
+                                <button type="button" onclick="handleUploadClick()" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
+    Carregar Leads
+</button>
+                            </form>
+                        </div>
+                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
+                            <h3 class="text-lg font-bold text-gray-900 mb-2">Roteiro Gerado:</h3>
+                            <p id="sdrResult" class="text-gray-700 text-sm leading-relaxed italic">
+                                Preencha o formulário para gerar um roteiro de chamada personalizado.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="content-simulator" class="mt-8 hidden">
+                <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">Simulador de Roteiros de Atendimento</h2>
+                    <p class="text-gray-500 mb-6 text-center">
+                        Simule a conversa com a URA e veja como os roteiros bancários funcionam.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div>
+                            <div class="flex flex-col gap-4">
+                                <label for="bankSelect" class="text-sm font-medium text-gray-700">Selecione o Banco:</label>
+                                <select id="bankSelect" class="p-3 border border-gray-300 rounded-lg focus:ring focus:ring-blue-200">
+                                    <option value="">Selecione...</option>
+                                    <option value="itau">Itaú</option>
+                                    <option value="santander">Santander</option>
+                                    <option value="caixa">Caixa</option>
+                                    <option value="bradesco">Bradesco</option>
+                                    <option value="bancodobrasil">Banco do Brasil</option>
+                                    <option value="c6bank">C6 Bank</option>
+                                    <option value="qualibank">QualiBank</option>
+                                    <option value="bancohappy">Banco Happy</option>
+                                    <option value="brb">Banco BRB</option>
+                                    <option value="picpay">Banco PicPay</option>
+                                    <option value="banrisul">Banrisul</option>
+                                    <option value="digio">Banco Digio</option>
+                                </select>
+                                <button id="simulateBtn" class="bg-purple-600 hover:bg-purple-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md mt-4">
+                                    Iniciar Simulação
+                                </button>
+                            </div>
+                        </div>
+                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
+                            <h3 class="text-lg font-bold text-gray-900 mb-2">Log da Simulação:</h3>
+                            <p id="simulatorLog" class="text-gray-700 text-sm leading-relaxed italic">
+                                Selecione um banco e clique em "Iniciar Simulação" para começar.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="content-clients" class="mt-8 hidden">
+                <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">Análise de Clientes</h2>
+                    <p class="text-gray-500 mb-6 text-center">
+                        Gerir e visualizar clientes com contratos finalizados.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div>
+                            <form id="clientForm" class="flex flex-col gap-4 mb-8">
+                                <h3 class="text-lg font-bold text-gray-900">Salvar Cliente</h3>
+                                <div class="flex flex-col">
+                                    <label for="clientName" class="text-sm font-medium text-gray-700">Nome:</label>
+                                    <input type="text" id="clientName" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-emerald-200" placeholder="Nome Completo" required>
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="clientCpf" class="text-sm font-medium text-gray-700">CPF:</label>
+                                    <input type="text" id="clientCpf" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-emerald-200" placeholder="000.000.000-00" required>
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="clientBenefitNumber" class="text-sm font-medium text-gray-700">Número do Benefício:</label>
+                                    <input type="text" id="clientBenefitNumber" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-emerald-200" placeholder="Número do Benefício">
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="clientAddress" class="text-sm font-medium text-gray-700">Endereço:</label>
+                                    <input type="text" id="clientAddress" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-emerald-200" placeholder="Rua, Número, Bairro">
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="clientPhone" class="text-sm font-medium text-gray-700">Telefone:</label>
+                                    <input type="text" id="clientPhone" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-emerald-200" placeholder="(99) 99999-9999">
+                                </div>
+                                <div class="flex flex-col">
+                                    <label for="contractDate" class="text-sm font-medium text-gray-700">Data de Finalização do Contrato:</label>
+                                    <input type="date" id="contractDate" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-emerald-200" required>
+                                </div>
+                                <button id="saveClientBtn" type="submit" class="bg-gray-400 text-white px-6 py-3 rounded-xl font-semibold shadow-md cursor-not-allowed" disabled>
+                                    Aguarde...
+                                </button>
+                            </form>
+                            <form id="searchForm" class="flex flex-col gap-4">
+                                <h3 class="text-lg font-bold text-gray-900">Buscar por CPF</h3>
+                                <div class="flex flex-col">
+                                    <label for="searchCpf" class="text-sm font-medium text-gray-700">CPF:</label>
+                                    <input type="text" id="searchCpf" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-blue-200" placeholder="Digite o CPF">
+                                </div>
+                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
+                                    Buscar
+                                </button>
+                            </form>
+                        </div>
+                        <div>
+                            <div class="bg-gray-50 p-6 rounded-2xl shadow-inner mb-8 overflow-y-auto max-h-96">
+                                <h3 class="text-lg font-bold text-gray-900 mb-2">Detalhes do Cliente</h3>
+                                <p id="clientDetails" class="text-gray-700 text-sm leading-relaxed italic">
+                                    Busque um cliente para ver os detalhes.
+                                </p>
+                            </div>
+                            <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
+                                <h3 class="text-lg font-bold text-gray-900 mb-2">Clientes Salvos</h3>
+                                <ul id="clientList" class="list-none space-y-2">
+                                    <!-- Clientes serão inseridos aqui pelo JavaScript -->
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="content-lead-simulator" class="mt-8 hidden">
+                <div class="max-w-4xl w-full mx-auto bg-white p-6 sm:p-10 rounded-2xl shadow-xl border border-gray-200">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">SDR IA - Simulador de Leads</h2>
+                    <p class="text-gray-500 text-center mb-6 max-w-lg mx-auto">
+                        Cole os dados do lead e a tabela de contratos para obter uma análise detalhada e um plano de ação.
+                    </p>
+
+                    <div class="mb-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div class="flex flex-col">
+                            <h3 class="text-lg font-bold mb-2 text-gray-700">1. Dados do Lead (Texto)</h3>
+                            <textarea id="textoLead" rows="8" placeholder="Cole o primeiro bloco de dados aqui...
+Ex:
+Nome: João da Silva
+Data Nascimento: 15/05/1980
+Salario: 3.500,00
+Margem Empréstimo: 1.050,00
+Margem Cartão: 50,00
+Fone Cliente: (99) 99999-9999" 
+                            class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"></textarea>
+                        </div>
+                        
+                        <div class="flex flex-col">
+                            <h3 class="text-lg font-bold mb-2 text-gray-700">2. Tabela de Contratos</h3>
+                            <textarea id="textoContratos" rows="8" placeholder="Cole a tabela de contratos aqui...
+Ex:
+123456 Banco Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
+789012 Banco do Brasil 05/2021 8000,00 200,00 96 36 6000,00 1,65" 
+                            class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"></textarea>
+                        </div>
+                        <div class="flex flex-col">
+                            <h3 class="text-lg font-bold mb-2 text-gray-700">3. Coeficiente / Taxa de Juros</h3>
+                            <label for="novoCoeficiente" class="text-sm text-gray-500 mb-1">Coeficiente de Simulação:</label>
+                            <input type="number" id="novoCoeficiente" step="0.00001" placeholder="Ex: 0.02250" 
+                            class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300 mb-4"/>
+                            <label for="novaTaxa" class="text-sm text-gray-500 mb-1">Taxa de Juros (para registro):</label>
+                            <input type="number" id="novaTaxa" step="0.01" placeholder="Ex: 1.85" 
+                            class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"/>
+                        </div>
+                    </div>
+
+                    <button onclick="processarLead()" class="w-full bg-purple-600 text-white p-4 rounded-xl font-semibold hover:bg-purple-700 transition-colors shadow-md">
+                        Processar Dados e Qualificar
+                    </button>
+
+                    <div id="resultados" class="mt-8 pt-6 border-t border-gray-200 hidden">
+                        <!-- Os resultados serão injetados aqui via JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+  const showStatus = (message, isError = false) => {
+            const statusMessageEl = document.getElementById('statusMessage');
+            if (statusMessageEl) {
+                statusMessageEl.textContent = message;
+                statusMessageEl.classList.toggle('text-red-600', isError);
+                statusMessageEl.classList.toggle('text-gray-600', !isError);
+            }
+        };
+
+        const showMessage = (message, isError) => {
+            const messageBox = document.createElement('div');
+            messageBox.className = `fixed top-4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl shadow-md z-50 transition-all duration-300 transform animate-pulse`;
+            messageBox.textContent = message;
+            if (isError) {
+                messageBox.classList.add('bg-red-500', 'text-white');
+            } else {
+                messageBox.classList.add('bg-green-500', 'text-white');
+            }
+            document.body.appendChild(messageBox);
+            setTimeout(() => {
+                messageBox.classList.add('opacity-0');
+                setTimeout(() => messageBox.remove(), 300);
+            }, 3000);
+        };
+
+        const initializeFirebase = async () => {
+            console.log("Iniciando a inicialização do Firebase...");
+            showStatus("A iniciar a conexão com a base de dados...", false);
+            const saveClientBtn = document.getElementById('saveClientBtn');
+            saveClientBtn.disabled = true;
+
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = {{ firebase_config|safe }};
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            if (Object.keys(firebaseConfig).length === 0) {
+                console.error("Erro: firebaseConfig não está disponível. Por favor, recarregue a página.");
+                showStatus("Erro: Configuração do Firebase ausente. Recarregue a página.", true);
+                return;
+            }
+
+            try {
+                window.app = initializeApp(firebaseConfig);
+                window.auth = getAuth(window.app);
+                window.db = getFirestore(window.app);
+
+                console.log("Instâncias do Firebase criadas. A tentar autenticar...");
+
+                onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        console.log("✅ Autenticação bem-sucedida. UID:", window.userId);
+                        document.getElementById('userIdDisplay').textContent = `ID do Usuário: ${window.userId}`;
+                        setupDatabaseListener();
+                        window.isFirebaseReady = true;
+
+                        saveClientBtn.disabled = false;
+                        saveClientBtn.textContent = 'Salvar Cliente';
+                        saveClientBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+                        saveClientBtn.classList.add('bg-emerald-600', 'hover:bg-emerald-700');
+                        showStatus("Plataforma pronta para salvar clientes!", false);
+                    } else {
+                        console.log("🔄 Usuário não autenticado. A tentar entrar anonimamente...");
+                        signInAnonymously(window.auth).catch(error => {
+                            console.error("❌ Erro ao tentar entrar anonimamente:", error);
+                            showStatus("Erro ao conectar à base de dados. Por favor, recarregue a página.", true);
+                        });
+                    }
+                });
+
+                if (initialAuthToken) {
+                    console.log("🔄 Tentando autenticar com o token personalizado...");
+                    await signInWithCustomToken(window.auth, initialAuthToken).catch(error => {
+                        console.error("❌ Erro ao autenticar com o token personalizado. O onAuthStateChanged tentará a autenticação anónima.", error);
+                    });
+                } else {
+                    console.log("Nenhum token personalizado disponível. O onAuthStateChanged tratará da autenticação anónima.");
+                }
+
+            } catch (error) {
+                console.error("❌ Erro fatal ao inicializar o Firebase:", error);
+                showStatus("Erro fatal: Não foi possível conectar à base de dados. Verifique a consola.", true);
+            }
+        };
+
+        window.addEventListener('load', initializeFirebase);
+        const tabs = document.querySelectorAll('nav button');
+        const contents = document.querySelectorAll('[id^="content-"]');
+
+const switchTab = (tabId) => {
+    tabs.forEach(tab => {
+        tab.classList.remove('text-blue-600', 'border-blue-600');
+        tab.classList.add('text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
+    });
+    const activeTab = document.getElementById(tabId);
+    if (activeTab) {
+        activeTab.classList.remove('text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
+        activeTab.classList.add('text-blue-600', 'border-blue-600');
+    } else {
+        console.log(`Erro: Tab ${tabId} não encontrada`);
+        return;
+    }
+
+    contents.forEach(content => content.classList.add('hidden'));
+    const targetContent = document.getElementById(`content-${tabId.split('-')[1]}`);
+    if (targetContent) {
+        targetContent.classList.remove('hidden');
+    } else {
+        console.log(`Erro: Conteúdo para ${tabId.split('-')[1]} não encontrado`);
+    }
+};
+
+tabs.forEach(tab => {
+    tab.addEventListener('click', () => switchTab(tab.id));
+});
+
+// Adicione esta linha para garantir que a aba inicial seja a do dashboard
+switchTab('tab-dashboard');
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => switchTab(tab.id));
+        });
+       const uploadForm = document.getElementById('uploadForm');
+if (!uploadForm) {
+    console.error("Erro: o elemento com o ID 'uploadForm' não foi encontrado. O upload de leads não funcionará.");
+}
+        const iniciarBtn = document.getElementById('iniciarBtn');
+        const pararBtn = document.getElementById('pararBtn');
+        const totalCallsMetric = document.getElementById('totalCallsMetric');
+        const answeredCallsMetric = document.getElementById('answeredCallsMetric');
+        const unansweredCallsMetric = document.getElementById('unansweredCallsMetric');
+        const uploadStatus = document.getElementById('uploadStatus');
+
+        let chartData = { total: 0, answered: 0, unanswered: 0 };
+        let myChart;
+
+        const initChart = () => {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            myChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Atendidas', 'Não Atendidas'],
+                    datasets: [{
+                        data: [chartData.answered, chartData.unanswered],
+                        backgroundColor: ['#10B981', '#F43F5E'],
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        title: { display: true, text: 'Taxa de Atendimento' }
+                    }
+                }
+            });
+        };
+
+        const updateDashboardMetrics = () => {
+            totalCallsMetric.textContent = chartData.total;
+            answeredCallsMetric.textContent = chartData.answered;
+            unansweredCallsMetric.textContent = chartData.unanswered;
+            myChart.data.datasets[0].data = [chartData.answered, chartData.unanswered];
+            myChart.update();
+        };
+
+        let callInterval;
+
+        const startCallSimulation = () => {
+            let totalSimulated = 0;
+            callInterval = setInterval(() => {
+                if (totalSimulated < 20) {
+                    totalSimulated++;
+                    chartData.total++;
+                    if (Math.random() > 0.4) {
+                        chartData.answered++;
+                        showStatus(`Chamada ${totalSimulated} atendida com sucesso.`);
+                    } else {
+                        chartData.unanswered++;
+                        showStatus(`Chamada ${totalSimulated} não atendida.`);
+                    }
+                    updateDashboardMetrics();
+                } else {
+                    clearInterval(callInterval);
+                    showStatus("Simulação de chamadas concluída!");
+                }
+            }, 1000);
+        };
+
+        const stopCallSimulation = () => {
+            clearInterval(callInterval);
+            showStatus("Simulação de chamadas pausada.");
+        };
+
+        const startRealCalls = async () => {
+            try {
+                const response = await fetch('/iniciar-chamadas', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                if (response.ok) {
+                    showStatus("Campanha iniciada com sucesso!");
+                } else {
+                    throw new Error("Erro ao iniciar a campanha.");
+                }
+            } catch (error) {
+                showStatus("Erro ao conectar à URA. Verifique os logs.", true);
+                console.error(error);
+            }
+        };
+
+        iniciarBtn.addEventListener('click', () => {
+            startRealCalls();
+        });
+
+        pararBtn.addEventListener('click', () => {
+            stopCallSimulation();
+        });
+
+if (uploadForm) {
+    uploadForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fileInput = document.getElementById('csv_file');
+        const file = fileInput.files[0];
+
+        if (!file) {
+            showMessage("Por favor, selecione um arquivo!", true);
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('csv_file', file);
+
+        const uploadStatus = document.getElementById('uploadStatus');
+        uploadStatus.classList.remove('hidden');
+        showStatus("A carregar leads para o servidor...");
+
+        try {
+            const response = await fetch('/upload-leads', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                showMessage(result.message, false);
+                showStatus("Lista de leads carregada com sucesso! Inicie a campanha.");
+            } else {
+                const errorResult = await response.json();
+                showMessage(`Erro: ${errorResult.message}`, true);
+                showStatus("Erro ao carregar leads.", true);
+            }
+        } catch (error) {
+            showMessage("Erro na conexão com o servidor. Tente novamente.", true);
+            showStatus("Erro de rede.", true);
+            console.error('Erro de upload:', error);
+        } finally {
+            uploadStatus.classList.add('hidden');
+        }
+    });
+}
+
+        const simulateBtn = document.getElementById('simulateBtn');
+        const simulatorLog = document.getElementById('simulatorLog');
+        const bankSelect = document.getElementById('bankSelect');
+
+        simulateBtn.addEventListener('click', () => {
+            const bank = bankSelect.value;
+            if (bank) {
+                simulatorLog.textContent = `Simulação iniciada para ${bank}. URA: 'Olá, bem-vindo ao ${bank}. Digite 1 para crédito, 2 para suporte.'`;
+                showMessage("Simulação iniciada!", false);
+            } else {
+                showMessage("Selecione um banco!", true);
+            }
+        });
+
+        const saveClient = async (e) => {
+            e.preventDefault();
+            if (!window.isFirebaseReady) {
+                showMessage("Firebase não está pronto. Aguarde.", true);
+                return;
+            }
+
+            const clientData = {
+                name: document.getElementById('clientName').value,
+                cpf: document.getElementById('clientCpf').value,
+                benefitNumber: document.getElementById('clientBenefitNumber').value,
+                address: document.getElementById('clientAddress').value,
+                phone: document.getElementById('clientPhone').value,
+                contractDate: document.getElementById('contractDate').value,
+                userId: window.userId,
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                await addDoc(collection(db, "clients"), clientData);
+                showMessage("Cliente salvo com sucesso!", false);
+                document.getElementById('clientForm').reset();
+                updateClientList();
+            } catch (error) {
+                showMessage("Erro ao salvar cliente.", true);
+                console.error(error);
+            }
+        };
+
+        const searchClient = async (e) => {
+            e.preventDefault();
+            const cpf = document.getElementById('searchCpf').value;
+            if (!cpf) {
+                showMessage("Digite um CPF para buscar.", true);
+                return;
+            }
+
+            try {
+                const q = query(collection(db, "clients"), where("cpf", "==", cpf), where("userId", "==", window.userId));
+                const querySnapshot = await getDocs(q);
+                if (!querySnapshot.empty) {
+                    const client = querySnapshot.docs[0].data();
+                    document.getElementById('clientDetails').textContent = `
+                        Nome: ${client.name}
+                        CPF: ${client.cpf}
+                        Benefício: ${client.benefitNumber || 'N/A'}
+                        Endereço: ${client.address || 'N/A'}
+                        Telefone: ${client.phone || 'N/A'}
+                        Data: ${client.contractDate || 'N/A'}
+                    `;
+                } else {
+                    document.getElementById('clientDetails').textContent = "Nenhum cliente encontrado.";
+                }
+            } catch (error) {
+                showMessage("Erro ao buscar cliente.", true);
+                console.error(error);
+            }
+        };
+const updateClientList = () => {
+    const clientList = document.getElementById('clientList');
+    clientList.innerHTML = '';
+    
+    if (!window.isFirebaseReady || !window.userId) {
+        console.warn("Firebase ou userId não estão prontos para o listener.");
+        return;
+    }
+    const appId = 'default-app-id'; // Use o ID do seu app, se ele for diferente
+    const clientCollectionRef = collection(window.db, `artifacts/${appId}/users/${window.userId}/clients`);
+    
+    const q = query(clientCollectionRef, where("userId", "==", window.userId));
+    
+    onSnapshot(q, (snapshot) => {
+        clientList.innerHTML = '';
+        snapshot.forEach((doc) => {
+            const client = doc.data();
+            const li = document.createElement('li');
+            li.className = 'text-gray-700 text-sm';
+            li.textContent = `${client.name} (CPF: ${client.cpf}) - ${client.contractDate || 'Sem data'}`;
+            clientList.appendChild(li);
+        });
+    }, (error) => {
+        console.error("Erro no listener do Firestore:", error);
+    });
+};
+
+const setupDatabaseListener = () => {
+    if (window.isFirebaseReady && window.db) {
+        updateClientList();
+        
+        const historicoChamadasRef = collection(window.db, 'historico_chamadas');
+        onSnapshot(historicoChamadasRef, (snapshot) => {
+            let totalCalls = 0;
+            let answeredCalls = 0;
+            let unansweredCalls = 0;
+            
+            snapshot.forEach(doc => {
+                const call = doc.data();
+                totalCalls++;
+                if (call.status === 'completed') {
+                    answeredCalls++;
+                } else {
+                    unansweredCalls++;
+                }
+            });
+
+            document.getElementById('totalCallsMetric').textContent = totalCalls;
+            document.getElementById('answeredCallsMetric').textContent = answeredCalls;
+            document.getElementById('unansweredCallsMetric').textContent = unansweredCalls;
+            
+            if (window.myChart) {
+                window.myChart.data.datasets[0].data = [answeredCalls, unansweredCalls];
+                window.myChart.update();
+            }
+        });
+    } else {
+        console.warn("Aguardando o Firebase e o userId estarem prontos para o listener.");
+    }
+};
+
+        document.getElementById('clientForm').addEventListener('submit', saveClient);
+        document.getElementById('searchForm').addEventListener('submit', searchClient);
+
+        function processarLead() {
+            const textoLead = document.getElementById('textoLead').value;
+            const textoContratos = document.getElementById('textoContratos').value;
+            const novoCoeficiente = parseFloat(document.getElementById('novoCoeficiente').value);
+            const novaTaxa = parseFloat(document.getElementById('novaTaxa').value);
+            const resultadosDiv = document.getElementById('resultados');
+
+            resultadosDiv.classList.remove('hidden');
+            resultadosDiv.innerHTML = `
+                <div class="flex justify-center items-center py-8">
+                    <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span class="ml-4 text-gray-500">A processar...</span>
+                </div>
+            `;
+
+            setTimeout(() => {
+                try {
+                    const coeficienteRefin = 0.02300;
+                    const coeficienteNovoContrato = 0.02350;
+                    const coeficienteCartao = 0.03940;
+
+                    const nomeMatch = textoLead.match(/Nome:\s*(.*)/i);
+                    const cpfMatch = textoLead.match(/CPF:\s*(.*)/i);
+                    const foneClienteMatch = textoLead.match(/Fone Cliente:\s*(.*)/i);
+                    const beneficioMatch = textoLead.match(/Beneficio:\s*(.*)/i);
+                    const especieMatch = textoLead.match(/Espécie:\s*(.*)/i);
+                    const dataNascimentoMatch = textoLead.match(/Data Nascimento:\s*([\d\/]+)/i);
+                    const salarioMatch = textoLead.match(/Salario:\s*([\d\.,]+)/i);
+                    const margemEmprestimoMatch = textoLead.match(/Margem Empréstimo:\s*([\d\.,]+)/i);
+                    const margemCartaoMatch = textoLead.match(/Margem Cartão:\s*([\d\.,]+)/i);
+                    const bancoMatch = textoLead.match(/Banco:\s*([\d]+)/i);
+                    const agenciaMatch = textoLead.match(/Agência:\s*([\d]+)/i);
+                    const contaCorrenteMatch = textoLead.match(/CC:\s*([\d]+)/i);
+                    
+                    let nome = nomeMatch ? nomeMatch[1].trim() : 'Não informado';
+                    let cpf = cpfMatch ? cpfMatch[1].trim() : 'Não informado';
+                    let foneCliente = foneClienteMatch ? foneClienteMatch[1].trim() : 'Não informado';
+                    let beneficio = beneficioMatch ? beneficioMatch[1].trim() : 'Não informado';
+                    let especie = especieMatch ? especieMatch[1].trim() : 'Não informado';
+                    let banco = bancoMatch ? bancoMatch[1].trim() : 'Não informado';
+                    let agencia = agenciaMatch ? agenciaMatch[1].trim() : 'Não informado';
+                    let contaCorrente = contaCorrenteMatch ? contaCorrenteMatch[1].trim() : 'Não informado';
+                    
+                    let salario = salarioMatch ? parseFloat(salarioMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
+                    let margemEmprestimo = margemEmprestimoMatch ? parseFloat(margemEmprestimoMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
+                    let margemCartao = margemCartaoMatch ? parseFloat(margemCartaoMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
+                    
+                    let idade = 'Não informada';
+                    if (dataNascimentoMatch) {
+                        const partesData = dataNascimentoMatch[1].split('/');
+                        const dataNascimento = new Date(partesData[2], partesData[1] - 1, partesData[0]);
+                        const diferencaTempo = Date.now() - dataNascimento.getTime();
+                        const diferencaAnos = new Date(diferencaTempo);
+                        idade = Math.abs(diferencaAnos.getUTCFullYear() - 1970);
+                    }
+
+                    let parcelaTotal = 0;
+                    let saldoTotal = 0;
+                    let totalVlEmprestado = 0;
+                    let contratosDetalhes = [];
+                    
+                    const linhasContrato = textoContratos.split('\n').filter(line => line.trim().length > 0);
+                    
+                    linhasContrato.forEach(line => {
+                        const parts = line.trim().split(/\s+/);
+                        if (parts.length < 9) {
+                            console.warn(`Linha ignorada devido a formato incorreto: ${line}`);
+                            return;
+                        }
+
+                        const numContrato = parts[0];
+                        const taxaStr = parts.pop();
+                        const saldoStr = parts.pop();
+                        const pagasStr = parts.pop();
+                        const prazoStr = parts.pop();
+                        const vlParcelaStr = parts.pop();
+                        const vlEmprestadoStr = parts.pop();
+                        const inicioDesconto = parts.pop();
+                        const bancoCompleto = parts.slice(1).join(' ');
+
+                        const vlEmprestado = parseFloat(vlEmprestadoStr.replace(/\./g, '').replace(',', '.'));
+                        const vlParcela = parseFloat(vlParcelaStr.replace(/\./g, '').replace(',', '.'));
+                        const prazo = parseInt(prazoStr, 10);
+                        const pagas = parseInt(pagasStr, 10);
+                        const saldo = parseFloat(saldoStr.replace(/\./g, '').replace(',', '.'));
+                        const taxa = parseFloat(taxaStr.replace(/\./g, '').replace(',', '.'));
+                        
+                        if (!isNaN(vlParcela) && !isNaN(saldo) && !isNaN(vlEmprestado)) {
+                            parcelaTotal += vlParcela;
+                            saldoTotal += saldo;
+                            totalVlEmprestado += vlEmprestado;
+                            const valorLiberado = (vlParcela / coeficienteRefin) - saldo;
+                            contratosDetalhes.push({
+                                numContrato: numContrato,
+                                banco: bancoCompleto,
+                                inicioDesconto: inicioDesconto,
+                                vlEmprestado: vlEmprestado,
+                                parcela: vlParcela,
+                                prazo: prazo,
+                                pagas: pagas,
+                                saldo: saldo,
+                                taxa: taxa,
+                                valorLiberado: valorLiberado
+                            });
+                        }
+                    });
+
+                    let simulacaoMargem = null;
+                    if (margemEmprestimo > 0) {
+                        const valorLiberado = margemEmprestimo / coeficienteNovoContrato;
+                        simulacaoMargem = { parcela: margemEmprestimo, valorLiberado: valorLiberado };
+                    }
+
+                    let simulacaoCartoes = null;
+                    if (margemCartao > 0) {
+                        const valorLiberado = margemCartao / coeficienteCartao;
+                        simulacaoCartoes = { parcela: margemCartao, valorLiberado: valorLiberado };
+                    }
+
+                    let simulacaoRC = null;
+                    if (parcelaTotal > 0 && !isNaN(novoCoeficiente) && novoCoeficiente > 0) {
+                        const valorLiberado = (parcelaTotal / novoCoeficiente) - saldoTotal;
+                        simulacaoRC = {
+                            parcela: parcelaTotal,
+                            coeficiente: novoCoeficiente,
+                            taxa: novaTaxa,
+                            valorLiberado: valorLiberado
+                        };
+                    }
+
+                    let pontuacao = 0;
+                    let acoes = [];
+                    
+                    if (salario > 2500) { pontuacao += 20; }
+                    if (nome !== 'Não informado') { pontuacao += 30; }
+                    if (idade !== 'Não informada' && idade >= 18 && idade < 60) { pontuacao += 10; }
+
+                    if (margemEmprestimo > 0) {
+                        acoes.push("O lead tem margem disponível para um novo contrato.");
+                        pontuacao += 25;
+                    } else {
+                        acoes.push("O lead não tem margem de empréstimo disponível. Foco em refinanciamento e portabilidade.");
+                    }
+                    
+                    if (saldoTotal > 0) {
+                        acoes.push("O lead possui contratos com saldo devedor. Avaliar a possibilidade de refinanciamento ou portabilidade.");
+                        if (margemEmprestimo === 0) {
+                            pontuacao += 15;
+                        }
+                    }
+
+                    if (margemCartao > 0) {
+                        acoes.push("Há margem para cartão consignado. Sugerir a oferta.");
+                        pontuacao += 10;
+                    }
+
+                    contratosDetalhes.forEach(c => {
+                        if (c.pagas && c.prazo && c.pagas / c.prazo > 0.5) {
+                            acoes.push(`O contrato com o banco ${c.banco} está com mais de 50% das parcelas pagas. É um excelente candidato para portabilidade.`);
+                        }
+                    });
+
+                    if (contratosDetalhes.length > 0) {
+                        const totalValorLiberado = contratosDetalhes.reduce((sum, c) => sum + c.valorLiberado, 0);
+                        if (totalValorLiberado > 5000) {
+                            acoes.push(`Com o refinanciamento dos contratos existentes, é possível liberar um alto valor (acima de R$ 5.000). Priorizar essa ação.`);
+                            pontuacao += 10;
+                        }
+                    }
+
+                    pontuacao = Math.min(pontuacao, 100);
+                    let status, classe_css;
+                    if (pontuacao >= 70) {
+                        status = "Alto";
+                        classe_css = "qualidade-alta";
+                    } else if (pontuacao >= 40) {
+                        status = "Médio";
+                        classe_css = "qualidade-media";
+                    } else {
+                        status = "Baixo";
+                        classe_css = "qualidade-baixa";
+                    }
+
+                    const htmlContratos = contratosDetalhes.map(c => {
+                        return `
+                        <li class="p-4 bg-gray-50 rounded-xl shadow-inner border border-gray-200">
+                            <ul class="space-y-1 text-sm text-gray-700">
+                                <li><span class="font-semibold">N° Contrato:</span> ${c.numContrato}</li>
+                                <li><span class="font-semibold">Banco:</span> ${c.banco}</li>
+                                <li><span class="font-semibold">Início Desconto:</span> ${c.inicioDesconto}</li>
+                                <li><span class="font-semibold">Vl. Emprestado:</span> R$ ${c.vlEmprestado.toFixed(2)}</li>
+                                <li><span class="font-semibold">Vl. Parcela:</span> R$ ${c.parcela.toFixed(2)}</li>
+                                <li><span class="font-semibold">Prazo:</span> ${c.prazo}</li>
+                                <li><span class="font-semibold">Pagas:</span> ${c.pagas}</li>
+                                <li><span class="font-semibold">Saldo:</span> R$ ${c.saldo.toFixed(2)}</li>
+                                <li><span class="font-semibold">Taxa:</span> ${c.taxa.toFixed(2)}%</li>
+                                <li class="mt-2 text-md font-bold text-emerald-600">Refinanciamento: Libera R$ ${(c.parcela / coeficienteRefin - c.saldo).toFixed(2)}</li>
+                            </ul>
+                        </li>
+                        `;
+                    }).join('');
+
+                    const htmlSimulacaoMargem = simulacaoMargem ? `
+                        <div class="bg-blue-50 p-4 rounded-lg border border-blue-200 mt-4">
+                            <h3 class="text-lg font-bold text-blue-800 mb-2">Simulação de Novo Contrato</h3>
+                            <p class="text-blue-600">Com a margem disponível (R$ ${simulacaoMargem.parcela.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoMargem.valorLiberado.toFixed(2)}</span>.</p>
+                        </div>
+                    ` : '';
+
+                    const htmlSimulacaoCartoes = simulacaoCartoes ? `
+                        <div class="bg-fuchsia-50 p-4 rounded-lg border border-fuchsia-200 mt-4">
+                            <h3 class="text-lg font-bold text-fuchsia-800 mb-2">Simulação de Cartão</h3>
+                            <p class="text-fuchsia-600">Com a margem para cartão (R$ ${simulacaoCartoes.parcela.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoCartoes.valorLiberado.toFixed(2)}</span>.</p>
+                        </div>
+                    ` : '';
+
+                    const htmlSimulacaoRC = simulacaoRC ? `
+                        <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-4">
+                            <h3 class="text-lg font-bold text-indigo-800 mb-2">Simulação com Coeficiente ${simulacaoRC.coeficiente.toFixed(5)}</h3>
+                            <p class="text-indigo-600">
+                                Baseado nas parcelas totais (R$ ${simulacaoRC.parcela.toFixed(2)}) e no saldo total (R$ ${saldoTotal.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoRC.valorLiberado.toFixed(2)}</span>.
+                            </p>
+                        </div>
+                    ` : '';
+                    
+                    resultadosDiv.innerHTML = `
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">Resultado da Qualificação</h2>
+                        <div class="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center">
+                                    <svg class="h-8 w-8 mr-2 text-gray-700" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>
+                                    <p class="text-xl font-semibold">Lead: ${nome}</p>
+                                </div>
+                                <div class="p-2 px-4 rounded-full font-bold text-sm ${classe_css}-bg text-white">
+                                    <span class="text-gray-800">Score:</span> ${pontuacao}/100
+                                </div>
+                            </div>
+                            <p class="text-lg mb-2">Qualificação: <span class="font-bold ${classe_css}">${status}</span></p>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                                <div>
+                                    <h3 class="text-xl font-bold text-gray-700 mb-2">Dados do Lead</h3>
+                                    <ul class="list-none space-y-2 text-gray-600">
+                                        <li><span class="font-semibold">CPF:</span> ${cpf}</li>
+                                        <li><span class="font-semibold">Telefone:</span> ${foneCliente}</li>
+                                        <li><span class="font-semibold">Benefício:</span> ${beneficio}</li>
+                                        <li><span class="font-semibold">Espécie:</span> ${especie}</li>
+                                        <li><span class="font-semibold">Idade:</span> ${idade}</li>
+                                        <li><span class="font-semibold">Salário Bruto:</span> R$ ${salario.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Margem de Empréstimo:</span> R$ ${margemEmprestimo.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Margem de Cartão:</span> R$ ${margemCartao.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Banco:</span> ${banco}</li>
+                                        <li><span class="font-semibold">Agência:</span> ${agencia}</li>
+                                        <li><span class="font-semibold">Conta Corrente:</span> ${contaCorrente}</li>
+                                    </ul>
+                                </div>
+                                <div>
+                                    <h3 class="text-xl font-bold text-gray-700 mb-2">Ações Sugeridas</h3>
+                                    <ul class="list-disc pl-6 space-y-2 text-gray-600">
+                                        ${acoes.map(acao => `<li>${acao}</li>`).join('')}
+                                    </ul>
+                                    <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Totais Financeiros</h3>
+                                    <ul class="list-none space-y-2 text-gray-600">
+                                        <li><span class="font-semibold">Valor Emprestado Total:</span> R$ ${totalVlEmprestado.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Parcelas Totais:</span> R$ ${parcelaTotal.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Saldo Devedor Total:</span> R$ ${saldoTotal.toFixed(2)}</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            ${htmlSimulacaoMargem}
+                            ${htmlSimulacaoCartoes}
+                            ${htmlSimulacaoRC}
+
+                            <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Análise de Contratos Individuais</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                                ${htmlContratos}
+                                ${contratosDetalhes.length === 0 ? `
+                                    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-lg" role="alert">
+                                        <p class="font-bold">Aviso: Nenhum contrato encontrado</p>
+                                        <p>Verifique a formatação da sua tabela. O simulador espera uma estrutura como a do exemplo abaixo:</p>
+                                        <pre class="mt-2 p-2 bg-yellow-200 rounded-md text-sm text-yellow-800">
+123456 Banco Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
+789012 Banco do Brasil 05/2021 8000,00 200,00 96 36 6000,00 1,65</pre>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error("Erro ao processar os dados:", error);
+                    resultadosDiv.innerHTML = `
+                        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg" role="alert">
+                            <p class="font-bold">Ocorreu um erro</p>
+                            <p>Não foi possível processar os dados. Por favor, verifique se a formatação está correta e tente novamente.</p>
+                        </div>
+                    `;
+                }
+            }, 500);
+        }
+    </script>
+</body>
+</html>
