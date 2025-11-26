@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SDR IA - Qualificação de Leads</title>
+    <!-- Inclui o framework Tailwind CSS para um design responsivo e moderno -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Estilo para a fonte Inter */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Estilos de cores para as qualificações */
+        .qualidade-baixa { color: #f44336; }
+        .qualidade-media { color: #ff9800; }
+        .qualidade-alta { color: #22c55e; }
+        .qualidade-baixa-bg { background-color: #fca5a5; }
+        .qualidade-media-bg { background-color: #fcd34d; }
+        .qualidade-alta-bg { background-color: #86efac; }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 sm:p-8 font-sans flex items-center justify-center min-h-screen">
+
+    <div class="max-w-4xl w-full mx-auto bg-white p-6 sm:p-10 rounded-2xl shadow-xl border border-gray-200">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-900 text-center mb-2">SDR IA - Simulador de Leads</h1>
+        <p class="text-gray-500 text-center mb-6 max-w-lg mx-auto">
+            Cole os dados do lead e a tabela de contratos para obter uma análise detalhada e um plano de ação.
+        </p>
+
+        <!-- Seção de Inputs -->
+        <div class="mb-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div class="flex flex-col">
+                <h2 class="text-lg font-bold mb-2 text-gray-700">1. Dados do Lead (Texto)</h2>
+                <textarea id="textoLead" rows="8" placeholder="Cole o primeiro bloco de dados aqui...
+Ex:
+Nome: João da Silva
+Data Nascimento: 15/05/1980
+Salario: 3.500,00
+Margem Empréstimo: 1.050,00
+Margem Cartão: 50,00
+Fone Cliente: (99) 99999-9999" 
+                class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"></textarea>
+            </div>
+            
+            <div class="flex flex-col">
+                <h2 class="text-lg font-bold mb-2 text-gray-700">2. Tabela de Contratos</h2>
+                <textarea id="textoContratos" rows="8" placeholder="Cole a tabela de contratos aqui...
+Ex:
+123456 Banco Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
+789012 Banco do Brasil 05/2021 8000,00 200,00 96 36 6000,00 1,65" 
+                class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"></textarea>
+            </div>
+            <div class="flex flex-col">
+                <h2 class="text-lg font-bold mb-2 text-gray-700">3. Coeficiente / Taxa de Juros</h2>
+                <label for="novoCoeficiente" class="text-sm text-gray-500 mb-1">Coeficiente de Simulação:</label>
+                <input type="number" id="novoCoeficiente" step="0.00001" placeholder="Ex: 0.02250" 
+                class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300 mb-4"/>
+                <label for="novaTaxa" class="text-sm text-gray-500 mb-1">Taxa de Juros (para registro):</label>
+                <input type="number" id="novaTaxa" step="0.01" placeholder="Ex: 1.85" 
+                class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"/>
+            </div>
+        </div>
+
+        <!-- Botão de Processamento -->
+        <button onclick="processarLead()" class="w-full bg-purple-600 text-white p-4 rounded-xl font-semibold hover:bg-purple-700 transition-colors shadow-md">
+            Processar Dados e Qualificar
+        </button>
+
+        <!-- Área de Resultados -->
+        <div id="resultados" class="mt-8 pt-6 border-t border-gray-200 hidden">
+            <!-- Os resultados serão injetados aqui via JavaScript -->
+        </div>
+
+    </div>
+
+    <script>
+        /**
+         * Lógica principal para processar os dados do lead e qualificar
+         */
+        function processarLead() {
+            const textoLead = document.getElementById('textoLead').value;
+            const textoContratos = document.getElementById('textoContratos').value;
+            const novoCoeficiente = parseFloat(document.getElementById('novoCoeficiente').value);
+            const novaTaxa = parseFloat(document.getElementById('novaTaxa').value);
+            const resultadosDiv = document.getElementById('resultados');
+
+            // Exibir a div de resultados e adicionar um spinner de carregamento
+            resultadosDiv.classList.remove('hidden');
+            resultadosDiv.innerHTML = `
+                <div class="flex justify-center items-center py-8">
+                    <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span class="ml-4 text-gray-500">A processar...</span>
+                </div>
+            `;
+
+            setTimeout(() => {
+                try {
+                    // Coeficientes de conversão para simulação de crédito
+                    // Este coeficiente é fixo para os cálculos individuais de cada contrato, como no seu exemplo
+                    const coeficienteRefin = 0.02300; 
+                    const coeficienteNovoContrato = 0.02350;
+                    const coeficienteCartao = 0.03940;
+
+                    // 1. Extração de dados do texto do lead
+                    // Assegura que o texto pode ser processado mesmo com espaços e quebras de linha variadas.
+                    const nomeMatch = textoLead.match(/Nome:\s*(.*)/i);
+                    const cpfMatch = textoLead.match(/CPF:\s*(.*)/i);
+                    const foneClienteMatch = textoLead.match(/Fone Cliente:\s*(.*)/i);
+                    const beneficioMatch = textoLead.match(/Beneficio:\s*(.*)/i);
+                    const especieMatch = textoLead.match(/Espécie:\s*(.*)/i);
+                    const dataNascimentoMatch = textoLead.match(/Data Nascimento:\s*([\d\/]+)/i);
+                    const salarioMatch = textoLead.match(/Salario:\s*([\d\.,]+)/i);
+                    const margemEmprestimoMatch = textoLead.match(/Margem Empréstimo:\s*([\d\.,]+)/i);
+                    const margemCartaoMatch = textoLead.match(/Margem Cartão:\s*([\d\.,]+)/i);
+                    const bancoMatch = textoLead.match(/Banco:\s*([\d]+)/i);
+                    const agenciaMatch = textoLead.match(/Agência:\s*([\d]+)/i);
+                    const contaCorrenteMatch = textoLead.match(/CC:\s*([\d]+)/i);
+                    
+                    let nome = nomeMatch ? nomeMatch[1].trim() : 'Não informado';
+                    let cpf = cpfMatch ? cpfMatch[1].trim() : 'Não informado';
+                    let foneCliente = foneClienteMatch ? foneClienteMatch[1].trim() : 'Não informado';
+                    let beneficio = beneficioMatch ? beneficioMatch[1].trim() : 'Não informado';
+                    let especie = especieMatch ? especieMatch[1].trim() : 'Não informado';
+                    let banco = bancoMatch ? bancoMatch[1].trim() : 'Não informado';
+                    let agencia = agenciaMatch ? agenciaMatch[1].trim() : 'Não informado';
+                    let contaCorrente = contaCorrenteMatch ? contaCorrenteMatch[1].trim() : 'Não informado';
+                    
+                    let salario = salarioMatch ? parseFloat(salarioMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
+                    let margemEmprestimo = margemEmprestimoMatch ? parseFloat(margemEmprestimoMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
+                    let margemCartao = margemCartaoMatch ? parseFloat(margemCartaoMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
+                    
+                    let idade = 'Não informada';
+                    if (dataNascimentoMatch) {
+                        const partesData = dataNascimentoMatch[1].split('/');
+                        const dataNascimento = new Date(partesData[2], partesData[1] - 1, partesData[0]);
+                        const diferencaTempo = Date.now() - dataNascimento.getTime();
+                        const diferencaAnos = new Date(diferencaTempo);
+                        idade = Math.abs(diferencaAnos.getUTCFullYear() - 1970);
+                    }
+
+                    // 2. Análise da tabela de contratos com a nova estrutura e lógica de parsing mais robusta
+                    let parcelaTotal = 0;
+                    let saldoTotal = 0;
+                    let totalVlEmprestado = 0;
+                    let contratosDetalhes = [];
+                    
+                    const linhasContrato = textoContratos.split('\n').filter(line => line.trim().length > 0);
+                    
+                    linhasContrato.forEach(line => {
+                        // Nova lógica para dividir a linha em partes, tornando o parsing mais flexível.
+                        const parts = line.trim().split(/\s+/);
+                        
+                        // Garante que há o número mínimo de colunas esperadas.
+                        if (parts.length < 9) {
+                             console.warn(`Linha ignorada devido a formato incorreto: ${line}`);
+                             return;
+                        }
+
+                        // As últimas 7 colunas (data e valores) são fixas, o restante é o nome do banco.
+                        const numContrato = parts[0];
+                        const taxaStr = parts.pop();
+                        const saldoStr = parts.pop();
+                        const pagasStr = parts.pop();
+                        const prazoStr = parts.pop();
+                        const vlParcelaStr = parts.pop();
+                        const vlEmprestadoStr = parts.pop();
+                        const inicioDesconto = parts.pop();
+                        const bancoCompleto = parts.slice(1).join(' ');
+
+                        // Limpeza e conversão dos valores
+                        const vlEmprestado = parseFloat(vlEmprestadoStr.replace(/\./g, '').replace(',', '.'));
+                        const vlParcela = parseFloat(vlParcelaStr.replace(/\./g, '').replace(',', '.'));
+                        const prazo = parseInt(prazoStr, 10);
+                        const pagas = parseInt(pagasStr, 10);
+                        const saldo = parseFloat(saldoStr.replace(/\./g, '').replace(',', '.'));
+                        const taxa = parseFloat(taxaStr.replace(/\./g, '').replace(',', '.'));
+                        
+                        // Validação e cálculo
+                        if (!isNaN(vlParcela) && !isNaN(saldo) && !isNaN(vlEmprestado)) {
+                            parcelaTotal += vlParcela;
+                            saldoTotal += saldo;
+                            totalVlEmprestado += vlEmprestado;
+                            // Calcula o valor liberado com o coeficiente padrão
+                            const valorLiberado = (vlParcela / coeficienteRefin) - saldo;
+                            contratosDetalhes.push({
+                                numContrato: numContrato,
+                                banco: bancoCompleto,
+                                inicioDesconto: inicioDesconto,
+                                vlEmprestado: vlEmprestado,
+                                parcela: vlParcela,
+                                prazo: prazo,
+                                pagas: pagas,
+                                saldo: saldo,
+                                taxa: taxa,
+                                valorLiberado: valorLiberado
+                            });
+                        }
+                    });
+
+                    // 3. Simulação de crédito baseada nas margens e novos coeficientes
+                    let simulacaoMargem = null;
+                    if (margemEmprestimo > 0) {
+                        const valorLiberado = margemEmprestimo / coeficienteNovoContrato;
+                        simulacaoMargem = { parcela: margemEmprestimo, valorLiberado: valorLiberado };
+                    }
+
+                    let simulacaoCartoes = null;
+                    if (margemCartao > 0) {
+                        const valorLiberado = margemCartao / coeficienteCartao;
+                        simulacaoCartoes = { parcela: margemCartao, valorLiberado: valorLiberado };
+                    }
+
+                    let simulacaoRC = null;
+                    // O bloco de simulação agora usa o coeficiente informado pelo usuário
+                    if (parcelaTotal > 0 && !isNaN(novoCoeficiente) && novoCoeficiente > 0) {
+                        const valorLiberado = (parcelaTotal / novoCoeficiente) - saldoTotal;
+                        simulacaoRC = {
+                            parcela: parcelaTotal,
+                            coeficiente: novoCoeficiente,
+                            taxa: novaTaxa,
+                            valorLiberado: valorLiberado
+                        };
+                    }
+
+                    // 4. Pontuação e qualificação do lead com aprimoramentos
+                    let pontuacao = 0;
+                    let acoes = [];
+                    
+                    if (salario > 2500) { pontuacao += 20; }
+                    if (nome !== 'Não informado') { pontuacao += 30; }
+                    if (idade !== 'Não informada' && idade >= 18 && idade < 60) { pontuacao += 10; }
+
+                    if (margemEmprestimo > 0) {
+                        acoes.push("O lead tem margem disponível para um novo contrato.");
+                        pontuacao += 25;
+                    } else {
+                        acoes.push("O lead não tem margem de empréstimo disponível. Foco em refinanciamento e portabilidade.");
+                    }
+                    
+                    if (saldoTotal > 0) {
+                        acoes.push("O lead possui contratos com saldo devedor. Avaliar a possibilidade de refinanciamento ou portabilidade.");
+                        if (margemEmprestimo === 0) {
+                            pontuacao += 15;
+                        }
+                    }
+
+                    if (margemCartao > 0) {
+                        acoes.push("Há margem para cartão consignado. Sugerir a oferta.");
+                        pontuacao += 10;
+                    }
+
+                    contratosDetalhes.forEach(c => {
+                        if (c.pagas && c.prazo && c.pagas / c.prazo > 0.5) {
+                            acoes.push(`O contrato com o banco ${c.banco} está com mais de 50% das parcelas pagas. É um excelente candidato para portabilidade.`);
+                        }
+                    });
+
+                    if (contratosDetalhes.length > 0) {
+                        const totalValorLiberado = contratosDetalhes.reduce((sum, c) => sum + c.valorLiberado, 0);
+                        if (totalValorLiberado > 5000) {
+                            acoes.push(`Com o refinanciamento dos contratos existentes, é possível liberar um alto valor (acima de R$ 5.000). Priorizar essa ação.`);
+                            pontuacao += 10;
+                        }
+                    }
+
+                    pontuacao = Math.min(pontuacao, 100);
+                    let status, classe_css;
+                    if (pontuacao >= 70) {
+                        status = "Alto";
+                        classe_css = "qualidade-alta";
+                    } else if (pontuacao >= 40) {
+                        status = "Médio";
+                        classe_css = "qualidade-media";
+                    } else {
+                        status = "Baixo";
+                        classe_css = "qualidade-baixa";
+                    }
+
+                    // 5. Renderização dos resultados na UI
+                    const htmlContratos = contratosDetalhes.map(c => {
+                        return `
+                        <li class="p-4 bg-gray-50 rounded-xl shadow-inner border border-gray-200">
+                            <ul class="space-y-1 text-sm text-gray-700">
+                                <li><span class="font-semibold">N° Contrato:</span> ${c.numContrato}</li>
+                                <li><span class="font-semibold">Banco:</span> ${c.banco}</li>
+                                <li><span class="font-semibold">Início Desconto:</span> ${c.inicioDesconto}</li>
+                                <li><span class="font-semibold">Vl. Emprestado:</span> R$ ${c.vlEmprestado.toFixed(2)}</li>
+                                <li><span class="font-semibold">Vl. Parcela:</span> R$ ${c.parcela.toFixed(2)}</li>
+                                <li><span class="font-semibold">Prazo:</span> ${c.prazo}</li>
+                                <li><span class="font-semibold">Pagas:</span> ${c.pagas}</li>
+                                <li><span class="font-semibold">Saldo:</span> R$ ${c.saldo.toFixed(2)}</li>
+                                <li><span class="font-semibold">Taxa:</span> ${c.taxa.toFixed(2)}%</li>
+                                <li class="mt-2 text-md font-bold text-emerald-600">Refinanciamento: Libera R$ ${(c.parcela / coeficienteRefin - c.saldo).toFixed(2)}</li>
+                            </ul>
+                        </li>
+                        `;
+                    }).join('');
+
+                    const htmlSimulacaoMargem = simulacaoMargem ? `
+                        <div class="bg-blue-50 p-4 rounded-lg border border-blue-200 mt-4">
+                            <h3 class="text-lg font-bold text-blue-800 mb-2">Simulação de Novo Contrato</h3>
+                            <p class="text-blue-600">Com a margem disponível (R$ ${simulacaoMargem.parcela.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoMargem.valorLiberado.toFixed(2)}</span>.</p>
+                        </div>
+                    ` : '';
+
+                    const htmlSimulacaoCartoes = simulacaoCartoes ? `
+                        <div class="bg-fuchsia-50 p-4 rounded-lg border border-fuchsia-200 mt-4">
+                            <h3 class="text-lg font-bold text-fuchsia-800 mb-2">Simulação de Cartão</h3>
+                            <p class="text-fuchsia-600">Com a margem para cartão (R$ ${simulacaoCartoes.parcela.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoCartoes.valorLiberado.toFixed(2)}</span>.</p>
+                        </div>
+                    ` : '';
+
+                    const htmlSimulacaoRC = simulacaoRC ? `
+                        <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-4">
+                            <h3 class="text-lg font-bold text-indigo-800 mb-2">Simulação com Coeficiente ${simulacaoRC.coeficiente.toFixed(5)}</h3>
+                            <p class="text-indigo-600">
+                                Baseado nas parcelas totais (R$ ${simulacaoRC.parcela.toFixed(2)}) e no saldo total (R$ ${saldoTotal.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoRC.valorLiberado.toFixed(2)}</span>.
+                            </p>
+                        </div>
+                    ` : '';
+                    
+                    resultadosDiv.innerHTML = `
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">Resultado da Qualificação</h2>
+                        <div class="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center">
+                                    <svg class="h-8 w-8 mr-2 text-gray-700" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>
+                                    <p class="text-xl font-semibold">Lead: ${nome}</p>
+                                </div>
+                                <div class="p-2 px-4 rounded-full font-bold text-sm ${classe_css}-bg text-white">
+                                    <span class="text-gray-800">Score:</span> ${pontuacao}/100
+                                </div>
+                            </div>
+                            <p class="text-lg mb-2">Qualificação: <span class="font-bold ${classe_css}">${status}</span></p>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                                <div>
+                                    <h3 class="text-xl font-bold text-gray-700 mb-2">Dados do Lead</h3>
+                                    <ul class="list-none space-y-2 text-gray-600">
+                                        <li><span class="font-semibold">CPF:</span> ${cpf}</li>
+                                        <li><span class="font-semibold">Telefone:</span> ${foneCliente}</li>
+                                        <li><span class="font-semibold">Benefício:</span> ${beneficio}</li>
+                                        <li><span class="font-semibold">Espécie:</span> ${especie}</li>
+                                        <li><span class="font-semibold">Idade:</span> ${idade}</li>
+                                        <li><span class="font-semibold">Salário Bruto:</span> R$ ${salario.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Margem de Empréstimo:</span> R$ ${margemEmprestimo.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Margem de Cartão:</span> R$ ${margemCartao.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Banco:</span> ${banco}</li>
+                                        <li><span class="font-semibold">Agência:</span> ${agencia}</li>
+                                        <li><span class="font-semibold">Conta Corrente:</span> ${contaCorrente}</li>
+                                    </ul>
+                                </div>
+                                <div>
+                                    <h3 class="text-xl font-bold text-gray-700 mb-2">Ações Sugeridas</h3>
+                                    <ul class="list-disc pl-6 space-y-2 text-gray-600">
+                                        ${acoes.map(acao => `<li>${acao}</li>`).join('')}
+                                    </ul>
+                                    <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Totais Financeiros</h3>
+                                    <ul class="list-none space-y-2 text-gray-600">
+                                        <li><span class="font-semibold">Valor Emprestado Total:</span> R$ ${totalVlEmprestado.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Parcelas Totais:</span> R$ ${parcelaTotal.toFixed(2)}</li>
+                                        <li><span class="font-semibold">Saldo Devedor Total:</span> R$ ${saldoTotal.toFixed(2)}</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            ${htmlSimulacaoMargem}
+                            ${htmlSimulacaoCartoes}
+                            ${htmlSimulacaoRC}
+
+                            <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Análise de Contratos Individuais</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                                ${htmlContratos}
+                                ${contratosDetalhes.length === 0 ? `
+                                    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-lg" role="alert">
+                                        <p class="font-bold">Aviso: Nenhum contrato encontrado</p>
+                                        <p>Verifique a formatação da sua tabela. O simulador espera uma estrutura como a do exemplo abaixo:</p>
+                                        <pre class="mt-2 p-2 bg-yellow-200 rounded-md text-sm text-yellow-800">
+123456 Banco Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
+789012 Banco do Brasil 05/2021 8000,00 200,00 96 36 6000,00 1,65</pre>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error("Erro ao processar os dados:", error);
+                    resultadosDiv.innerHTML = `
+                        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg" role="alert">
+                            <p class="font-bold">Ocorreu um erro</p>
+                            <p>Não foi possível processar os dados. Por favor, verifique se a formatação está correta e tente novamente.</p>
+                        </div>
+                    `;
+                }
+            }, 500); // Simula um tempo de processamento para UX
+        }
+    </script>
+</body>
+</html>
