@@ -101,7 +101,10 @@
                         </div>
                         <div class="bg-blue-50 p-6 rounded-2xl shadow-inner">
                             <h2 class="text-xl font-semibold text-blue-900 mb-4">Carregar Lista de Leads</h2>
-                            <form id="uploadForm" class="flex flex-col sm:flex-row items-center justify-center gap-4">
+<form id="uploadForm" class="flex flex-col sm:flex-row items-center justify-center gap-4" 
+      action="/iniciar-chamadas" 
+      method="POST" 
+      enctype="multipart/form-data">
     <label for="csv_file" id="fileLabel" class="flex-1 cursor-pointer bg-blue-100 hover:bg-blue-200 transition duration-300 text-blue-700 px-4 py-3 rounded-xl font-medium shadow-sm">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M.5 4a.5.5 0 0 1 .5-.5h.5a.5.5 0 0 1 .5.5V13a.5.5 0 0 1-1 0V4z" clip-rule="evenodd" />
@@ -1062,4 +1065,5 @@ const setupDatabaseListener = () => {
         }
     </script>
 </body>
+
 </html>
