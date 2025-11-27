@@ -35,8 +35,7 @@ except KeyError as e:
     exit(1)
 
 # =======================================================
-# 🛠️ CORREÇÃO 1: AUTENTICAÇÃO FIREBASE (JWT Signature Fix)
-# Removemos o código da chave JSON hardcoded e forçamos a leitura da variável de ambiente.
+# 🛠️ CORREÇÃO 1: AUTENTICAÇÃO FIREBASE (Já OK no seu código)
 # =======================================================
 db = None
 firebase_credentials_json = os.environ.get('FIREBASE_CREDENTIALS')
@@ -65,7 +64,6 @@ client = Client(account_sid, auth_token)
 
 # Variáveis globais para controlar a campanha de chamadas
 discagem_ativa = False
-# A lista de leads não será mais usada, mas mantemos por segurança.
 leads_para_chamar = [] 
 base_url = "https://ura-reversa-prod.onrender.com"
 
@@ -108,8 +106,7 @@ def dashboard():
     return render_template("dashboard.html", firebase_config=json.dumps(firebase_config_json))
 
 # =======================================================
-# 🛠️ CORREÇÃO 2: PERSISTÊNCIA DE LEADS (Uso do Firestore)
-# Salvamos no Firestore em vez da variável global (Worker Fix)
+# 🛠️ CORREÇÃO 2: PERSISTÊNCIA DE LEADS (Já OK no seu código)
 # =======================================================
 @app.route('/upload-leads', methods=['POST'])
 def upload_leads():
@@ -176,10 +173,7 @@ def parar_chamadas():
     print("Campanha de chamadas interrompida.")
     return jsonify({'message': 'Campanha de chamadas parada com sucesso!'}), 200
 
-# =======================================================
-# 🛠️ CORREÇÃO 3: CONTEXTO DA CHAMADA (Passando dados via URL)
-# Enviamos os dados do lead na URL para que /handle-gather possa salvá-los.
-# =======================================================
+# --- FUNÇÃO QUE EXECUTA A DISCAGEM (OK no seu código) ---
 def fazer_chamadas(leads):
     global discagem_ativa
     for lead in leads:
@@ -224,7 +218,12 @@ def fazer_chamadas(leads):
     discagem_ativa = False
     print("Campanha de chamadas finalizada.")
 
-# --- ROTA PARA A URA PRINCIPAL (GATHER) ---
+# =======================================================
+# 🛠️ CORREÇÃO 3: URA PRINCIPAL (GATHER)
+# 1. Corrigido erro de sintaxe onde o 'gather' estava fora do bloco da função.
+# 2. Adicionado 'response.redirect' e aumentado 'timeout' para 20 segundos.
+# 3. 'action' agora usa a URL absoluta (com base_url).
+# =======================================================
 @app.route('/gather', methods=['GET', 'POST'])
 def gather():
     response = VoiceResponse()
@@ -235,29 +234,33 @@ def gather():
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
     print(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    # ANTES: Você está passando o lead_data na action.
-gather = Gather(num_digits=1, 
-                action=f'/handle-gather?lead_data={lead_data_str}', # <--- O lead_data vai para a próxima rota
-                method='POST', 
-                timeout=10)
-
-# Altere para o código abaixo:
-gather = Gather(num_digits=1, 
-                action=f'{base_url}/handle-gather?lead_data={lead_data_str}', # <--- Use o base_url completo para a action
-                method='POST', 
-                timeout=10)
+    # Cria a tag Gather
+    gather = Gather(num_digits=1, 
+                    action=f'{base_url}/handle-gather?lead_data={lead_data_str}', # URL ABSOLUTA CORRETA
+                    method='POST', 
+                    timeout=20) # Aumentado para 20s
+    
+    gather.play(audio_url)
+    response.append(gather)
+    
+    # O que acontece se o tempo acabar (timeout) - Redireciona para o handle-gather
+    # Isso garante que a chamada não caia no "Sorry, goodbye" e nos dá um log.
+    response.redirect(f'{base_url}/handle-gather?lead_data={lead_data_str}') 
+    
+    return str(response)
 
 # =======================================================
-# 🛠️ CORREÇÃO 3 (continuação): ROTA QUE LIDA COM OS DÍGITOS
-# Agora, recuperamos os dados do lead da URL, não da variável global.
+# 🛠️ CORREÇÃO 4: ROTA QUE LIDA COM OS DÍGITOS (/handle-gather)
+# Adicionado log de debug e confirmado o fluxo de salvamento.
 # =======================================================
 @app.route('/handle-gather', methods=['GET', 'POST'])
 def handle_gather():
     response = VoiceResponse()
+    # Pega o dígito (se houver)
     digit_pressed = request.values.get('Digits', None)
     client_number = request.values.get('To', None)
     
-    # NOVO: Tenta obter os detalhes do lead da URL
+    # Tenta obter os detalhes do lead da URL (GET ou POST)
     lead_data_str = request.values.get('lead_data', '{}')
     
     try:
@@ -266,22 +269,23 @@ def handle_gather():
     except (json.JSONDecodeError, AttributeError):
         lead_details = {}
         
+    # LOG CRÍTICO para debug
+    print(f"DEBUG /handle-gather: Digito: {digit_pressed}, Lead Data: {lead_details}")
+        
     if not lead_details or 'telefone' not in lead_details:
         print(f"Falha ao recuperar contexto do lead para o número {client_number}.")
         response.say("Desculpe, não conseguimos identificar a campanha. Encerrando a chamada.")
         response.append(Hangup())
         return str(response)
 
-    # NOVO: Obtém os dados dos detalhes recuperados
+    # Obtém os dados dos detalhes recuperados
     nome = lead_details.get('nome', '')
     cpf = lead_details.get('cpf', '')
     matricula = lead_details.get('matricula', '')
     empregador = lead_details.get('empregador', '')
 
+    # --- Cliente pressionou 1 ---
     if digit_pressed == '1':
-        
-        # 🔔 Adicionamos log para ver se os dados estão vindo
-        print(f"DEBUG: Dados do lead recuperados para salvar (Digito 1): {lead_details}")
         
         lead_data = {
             "telefone": clean_and_format_phone(client_number),
@@ -290,21 +294,18 @@ def handle_gather():
             "cpf": cpf,
             "matricula": matricula,
             "empregador": empregador,
-            "data_interesse": datetime.now().isoformat() # Adicionando data de interesse
+            "data_interesse": datetime.now().isoformat()
         }
         
-        # Salva o lead no Firebase
-        salvar_dados_firebase(lead_data)
+        salvar_dados_firebase(lead_data) # <--- Salva no leads_interessados
         
         # Resposta de sucesso
         audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
         response.play(audio_url)
         response.append(Hangup())
-        
-    # O restante da função handle_gather continua
 
+    # --- Cliente pressionou 2 ---
     elif digit_pressed == '2':
-        response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
         
         lead_data = {
             "telefone": clean_and_format_phone(client_number),
@@ -316,43 +317,43 @@ def handle_gather():
         }
         salvar_dados_firebase(lead_data)
         
+        response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
         response.append(Hangup())
     
+    # --- Timeout ou Opção Inválida ---
     else:
-        print(f"Cliente {client_number} não digitou ou digitou opção inválida ({digit_pressed}).")
+        # Este bloco também será executado se o timeout no Gather for atingido (graças ao Redirect)
+        print(f"Cliente {client_number} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
+        
+        # Opcional: Se quiser salvar quem deu timeout, use o digito '0' (ou None)
+        # salvar_dados_firebase({
+        #     "telefone": clean_and_format_phone(client_number),
+        #     "digito_pressionado": digit_pressed,
+        #     "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador
+        # })
+        
         response.say("Opção inválida ou tempo esgotado. Encerrando.", voice="Vitoria", language="pt-BR")
         response.append(Hangup())
 
     return str(response)
 
 # --- ROTA PARA RECEBER STATUS DAS CHAMADAS ---
+# Mantida sem o tratamento de lead_data, pois o Twilio não envia contexto automaticamente.
 @app.route('/status_callback', methods=['GET', 'POST'])
 def status_callback():
     call_sid = request.values.get('CallSid', None)
     call_status = request.values.get('CallStatus', None)
     to_number = request.values.get('To', None)
     
-    # Decodifica o lead_data (o Twilio envia o lead_data original)
-    lead_data_str = request.values.get('lead_data')
-    # O status callback não está enviando o lead_data, vamos tentar recuperar do código
-    lead_details = None
-    
-    # O código original tentava isso, mas sem o contexto da variável global, é difícil.
-    # Por enquanto, vamos registrar o status da chamada sem os detalhes do lead, que é o mais seguro.
-    
     print(f"Status da chamada {call_sid}: {call_status} para {to_number}")
     
-    # Salva o status da chamada no Firebase
     if db is not None:
         try:
-            # Pegamos o nome do lead se estiver disponível, caso contrário fica vazio
-            nome_lead = lead_details.get('nome', '') if lead_details else ''
-            
             db.collection('historico_chamadas').add({
                 'call_sid': call_sid,
                 'status': call_status,
                 'telefone': to_number,
-                'nome': nome_lead,
+                'nome': '', # Nome fica vazio aqui, pois não temos o contexto do lead no callback.
                 'data_chamada': datetime.now().isoformat()
             })
             print(f"Status da chamada '{call_status}' salvo no Firebase para {to_number}.")
