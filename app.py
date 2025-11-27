@@ -227,24 +227,20 @@ def fazer_chamadas(leads):
 @app.route('/gather', methods=['GET', 'POST'])
 def gather():
     response = VoiceResponse()
-    
-    # Recupera o lead_data que veio da URL da função fazer_chamadas
     lead_data_str = request.values.get('lead_data', '')
-    
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
     print(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    # Cria a tag Gather
+    # CRIA A TAG GATHER COM A URL ABSOLUTA
     gather = Gather(num_digits=1, 
-                    action=f'{base_url}/handle-gather?lead_data={lead_data_str}', # URL ABSOLUTA CORRETA
+                    action=f'{base_url}/handle-gather?lead_data={lead_data_str}', 
                     method='POST', 
-                    timeout=20) # Aumentado para 20s
+                    timeout=20) 
     
     gather.play(audio_url)
     response.append(gather)
     
-    # O que acontece se o tempo acabar (timeout) - Redireciona para o handle-gather
-    # Isso garante que a chamada não caia no "Sorry, goodbye" e nos dá um log.
+    # REDIRECIONA EM CASO DE TIMEOUT/FALHA
     response.redirect(f'{base_url}/handle-gather?lead_data={lead_data_str}') 
     
     return str(response)
