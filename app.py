@@ -83,12 +83,10 @@ def salvar_dados_firebase(dados):
     global db
     if db is None:
         print("Erro: A conexão com o Firebase não está ativa.")
-        return False
+        return False # Retorna False em caso de falha de conexão.
     try:
         leads_collection_ref = db.collection('leads_interessados')
-        
-        # LOG DETALHADO ANTES DE SALVAR
-        print(f"Tentando salvar no Firebase: {dados}") 
+        print(f"Tentando salvar no Firebase: {dados}") # Log para debug
         
         leads_collection_ref.add({
             'telefone': dados.get('telefone', 'N/A'),
@@ -97,14 +95,14 @@ def salvar_dados_firebase(dados):
             'matricula': dados.get('matricula', 'N/A'),
             'empregador': dados.get('empregador', 'N/A'),
             'digito_pressionado': dados.get('digito_pressionado', 'N/A'),
-            'data_interesse': dados.get('data_interesse', datetime.now().isoformat()) 
+            'data_interesse': dados.get('data_interesse', datetime.now().isoformat())
         })
         print(f"Dados salvos no Firebase com SUCESSO para o telefone: {dados.get('telefone')}")
-        return True
+        return True # Retorna True em caso de sucesso.
     except Exception as e:
-        # Se houver uma falha de conexão ou permissão, o log será exibido.
+        # Se houver falha (permissão, etc.), o erro aparece no log.
         print(f"ERRO CRÍTICO no Firebase: Falha ao salvar dados: {e}") 
-        return False # Retorna Falso, mas a chamada do Twilio continua.
+        return False # Retorna False, o servidor não quebra.
 
 # --- ROTA RAIZ PARA O DASHBOARD ---
 @app.route("/", methods=['GET'])
@@ -283,11 +281,16 @@ def handle_gather():
     matricula = lead_details.get('matricula', '')
     empregador = lead_details.get('empregador', '')
 
+  # ... (código para obter lead_details, nome, cpf, etc.)
+
     # --- Cliente pressionou 1 (Interessado) ---
     if digit_pressed == '1':
         
+        # O lead_telefone JÁ ESTÁ LIMPO do contexto (veio da fazer_chamadas)
+        lead_telefone = lead_details.get('telefone', '') 
+        
         lead_data = {
-            "telefone": lead_telefone, # Usa o telefone limpo do contexto
+            "telefone": lead_telefone, 
             "digito_pressionado": digit_pressed,
             "nome": nome,
             "cpf": cpf,
@@ -296,17 +299,22 @@ def handle_gather():
             "data_interesse": datetime.now().isoformat()
         }
         
+        # LOG CRÍTICO ANTES DE TENTAR SALVAR
+        print(f"DEBUG /handle-gather: Preparando para salvar digito 1. Dados: {lead_data}")
+        
         salvamento_ok = salvar_dados_firebase(lead_data) # Chama a função robusta
         
-        # Resposta de sucesso (sem quebrar a chamada se o Firebase falhar)
+        # Resposta de sucesso (não depende do sucesso do Firebase)
         audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
         response.play(audio_url)
         
         if not salvamento_ok:
+            # Dá um aviso ao cliente, mas a chamada termina corretamente (Hangup).
             response.say("Ocorreu um erro ao registrar sua opção. Mas o sistema tentará processar em breve.", voice="Vitoria", language="pt-BR")
             
         response.append(Hangup())
-
+        
+    # ... (restante da rota)
     # --- Cliente pressionou 2 (Não interessado) ---
     elif digit_pressed == '2':
         
