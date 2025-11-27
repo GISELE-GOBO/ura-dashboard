@@ -249,42 +249,46 @@ def gather():
 # 🛠️ CORREÇÃO 4: ROTA QUE LIDA COM OS DÍGITOS (/handle-gather)
 # Adicionado log de debug e confirmado o fluxo de salvamento.
 # =======================================================
+# No app.py, função /handle-gather
+
 @app.route('/handle-gather', methods=['GET', 'POST'])
 def handle_gather():
     response = VoiceResponse()
-    # Pega o dígito (se houver)
     digit_pressed = request.values.get('Digits', None)
-    client_number = request.values.get('To', None)
+    # NÃO precisamos mais do client_number (To), pois o telefone do lead está no contexto
     
-    # Tenta obter os detalhes do lead da URL (GET ou POST)
     lead_data_str = request.values.get('lead_data', '{}')
     
     try:
-        # Decodifica e desserializa os dados que vieram na URL
         lead_details = json.loads(unquote(lead_data_str))
     except (json.JSONDecodeError, AttributeError):
         lead_details = {}
         
-    # LOG CRÍTICO para debug
-    print(f"DEBUG /handle-gather: Digito: {digit_pressed}, Lead Data: {lead_details}")
+    # --- Verificação de Contexto Crítica ---
+    lead_telefone = lead_details.get('telefone', '')
+    
+    print(f"DEBUG /handle-gather: Digito: {digit_pressed}, Telefone Lead: {lead_telefone}, Dados: {lead_details}")
         
-    if not lead_details or 'telefone' not in lead_details:
-        print(f"Falha ao recuperar contexto do lead para o número {client_number}.")
+    if not lead_telefone:
+        print(f"Falha ao recuperar telefone do lead no contexto.")
         response.say("Desculpe, não conseguimos identificar a campanha. Encerrando a chamada.")
         response.append(Hangup())
         return str(response)
 
-    # Obtém os dados dos detalhes recuperados
+    # ... (restante dos detalhes como nome, cpf, etc. permanecem iguais)
+    
     nome = lead_details.get('nome', '')
     cpf = lead_details.get('cpf', '')
     matricula = lead_details.get('matricula', '')
     empregador = lead_details.get('empregador', '')
 
+
     # --- Cliente pressionou 1 ---
     if digit_pressed == '1':
         
+        # AGORA USAMOS O lead_telefone (que já está formatado com 55)
         lead_data = {
-            "telefone": clean_and_format_phone(client_number),
+            "telefone": lead_telefone, 
             "digito_pressionado": digit_pressed,
             "nome": nome,
             "cpf": cpf,
@@ -293,41 +297,38 @@ def handle_gather():
             "data_interesse": datetime.now().isoformat()
         }
         
-        salvar_dados_firebase(lead_data) # <--- Salva no leads_interessados
+        # O try/except é fundamental para evitar a mensagem de "Goodbye"
+        try:
+            salvar_dados_firebase(lead_data) # <--- Salva no leads_interessados
+        except Exception as e:
+            print(f"ERRO CRÍTICO ao salvar lead interessado no Firebase: {e}")
         
         # Resposta de sucesso
         audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
         response.play(audio_url)
         response.append(Hangup())
-
+        
     # --- Cliente pressionou 2 ---
     elif digit_pressed == '2':
         
         lead_data = {
-            "telefone": clean_and_format_phone(client_number),
+            "telefone": lead_telefone, # AGORA USAMOS O lead_telefone
             "digito_pressionado": digit_pressed,
-            "nome": nome,
-            "cpf": cpf,
-            "matricula": matricula,
-            "empregador": empregador
+            # ... (outros dados)
         }
-        salvar_dados_firebase(lead_data)
+        
+        # Opcional: Adicionar try/except aqui também para garantir o fim da chamada
+        try:
+            salvar_dados_firebase(lead_data)
+        except Exception as e:
+            print(f"ERRO CRÍTICO ao salvar lead que não quis continuar no Firebase: {e}")
         
         response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
         response.append(Hangup())
     
     # --- Timeout ou Opção Inválida ---
     else:
-        # Este bloco também será executado se o timeout no Gather for atingido (graças ao Redirect)
-        print(f"Cliente {client_number} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
-        
-        # Opcional: Se quiser salvar quem deu timeout, use o digito '0' (ou None)
-        # salvar_dados_firebase({
-        #     "telefone": clean_and_format_phone(client_number),
-        #     "digito_pressionado": digit_pressed,
-        #     "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador
-        # })
-        
+        # ... (sem mudanças)
         response.say("Opção inválida ou tempo esgotado. Encerrando.", voice="Vitoria", language="pt-BR")
         response.append(Hangup())
 
