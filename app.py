@@ -7,11 +7,12 @@ import logging
 import sys
 import os
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote # Importamos unquote para decodificar a URL
 import requests
 import threading
 from dotenv import load_dotenv
 from datetime import datetime
+import json # Importamos JSON para lidar com a chave da variável de ambiente
 
 # Importa as bibliotecas do Firebase
 import firebase_admin
@@ -30,33 +31,29 @@ try:
     auth_token = os.environ["TWILIO_AUTH_TOKEN"]
     twilio_number = os.environ["TWILIO_PHONE_NUMBER"]
 except KeyError as e:
-    # Em produção, a aplicação deve ter essas variáveis.
     print(f"Erro: Variável de ambiente não encontrada: {e}")
     exit(1)
 
-# Nome do arquivo de credenciais do Firebase
-FIREBASE_CREDENTIALS_FILE = {
-  "type": "service_account",
-  "project_id": "ura-dashboard",
-  "private_key_id": "9c64c656cd60c080e41a80f7fccfe242a737f742",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCZCdtnpxQQEI9w\n584p6k2ZdSp+jP8rHE6vvZYubIPDjI6zguIFi1+FjhXDck3efD4GPmxgGvXGnlFX\n7HgdEtTa4CTAzwJMwoB9B1kV6vOFhekn0b5Jb6GHU+84EYlIoBHzwYM+QL2XyuuS\n//YNDQi7luZQ0EO4QKEYFjLeZ7xczQ1lBfGCQhiKCx8aVyVO90Yd9jrlvYwB1HRf\nM2t6KMN0Oj8FtL339Vb0lrM/Ve0knx6QhDwiq8n62TPct0Li7pVIsSqmlEu87Pd4\n+k0jMsk3cLG05GbitcnN+VhFBkIbuuH3+ztpflUdRKZWniRca1U/yxatEmsfqyds\nUzqptmUbAgMBAAECggEAGA9oKrYmXdY0rwQKsiVPmOpGSYoiTeVP66pLU7Ykyxgs\nkUVpAoUkeetaOZWdb3aqC7JBuKRUcqsOT9vyEGQXCehGbve8vVOw/rcqhtse+SWR\n//wmRgZiZ1PHXtHG+x+LYv7QAvgLtrMk8UIDrY6YimGRiTANDYk/qnlG+xdlElO+\nVbl0vjqLbkB4LFPpqzA+zz243trXXdFA5juTRNnsq/WbRUmTH98IVxmNFIhFrJI1\nze2Wh09rUHJlY/OqyJbusKIuD2LfxcW3olmJcRM51r30lUP7PttOgeB6Qy6HhrOw\nJgVcp/mxbJO6WpDgLeNxVacPL4O2F7eiixrhoAn5WQKBgQDOejnzOFFgeBO1KyTw\nstmawMaVm2ppZU9UicEAGGD+78uYj/DOxVSN8D8Q7GhMYWivSzpxcUEVT8J0KbQ6\nXUmGzzVj/OHiyBo8IGRDGp7Frm4r06ssWStvtYW/+Z7h44bA4P8qN44UKUmwzv0p\n2eWA3KTcuCje3j+0SvB5QYjKKQKBgQC9vnboxIXgqTse7fbPuG4SI7d5vvVsXNMS\ns/rpF3x4s+5D/41jJ7EkGU10h+QYLQv2sKAVLwOnd04CnPWsObkAOUjsjSAwEWVv\n2ZtS+nYmsWbq0sL5ZTCGXcwBc3K82hHLwFJgpNrKEi0/vL5j2ZrOdYzkztBKEVmB\nJmTi82/lowKBgHMdXdWmHmiESaiF51ByxjMrKwwZ29fq7bGaI4okDV/U3VOvXHhL\nN/ryaJbM1tFOtYiVjn3UwI5bK3SME7k+bVHFkGSwhldjbIz9Gij3XHGl8DJrDlHp\nXPgo4erIBra1nVlHl7s3wfSnmDgFDswYeYXAfgG4gsDOdAHWjf9sdBERAoGASSgK\nSKycwYX+GWq+YlBFgBDtSK9riKAxcWCbOQupHhChqO364WQIVFa9GlTaiMe1eSOY\nVRKPYh4JodBKmGCZB5EOoMW4x0+twHYyAMg4jaqQd7FTIzz0fJnlchnE/zNE8T3x\nhPmKsaZYc96duXnIyhlgfUeP3z7ZN4ZKF4aseekCgYBcqPYzlWj25K1FF4huqntk\nFlF6gFNVTqG02Mo4s/2Y0UXuj/g5b/b1Hbsn4zfqNBhD7rru8Tyzi/+Q+thj4km+\nKoVogkYza0Xsp910yrx879wPjOVfCbOdkg6bTz6aqnza/BHqN+eViEKegKvhKyzC\ngNAFFcw8IkkTaFKDu05urw==\n-----END PRIVATE KEY-----\n",
-  "client_email": "firebase-adminsdk-fbsvc@ura-dashboard.iam.gserviceaccount.com",
-  "client_id": "103156061573327871291",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40ura-dashboard.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
-}
+# =======================================================
+# 🛠️ CORREÇÃO 1: AUTENTICAÇÃO FIREBASE (JWT Signature Fix)
+# Removemos o código da chave JSON hardcoded e forçamos a leitura da variável de ambiente.
+# =======================================================
+db = None
+firebase_credentials_json = os.environ.get('FIREBASE_CREDENTIALS')
 
-try:
-    cred = credentials.Certificate(FIREBASE_CREDENTIALS_FILE)
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print("Conexão com o Firebase estabelecida com sucesso.")
-except Exception as e:
-    print(f"Erro ao inicializar o Firebase: {e}")
-    db = None
+if firebase_credentials_json:
+    try:
+        # Carrega o JSON da variável de ambiente
+        cred_data = json.loads(firebase_credentials_json)
+        cred = credentials.Certificate(cred_data)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("Conexão com o Firebase estabelecida com sucesso usando a variável de ambiente.")
+    except Exception as e:
+        print(f"Erro ao inicializar o Firebase com variável de ambiente: {e}")
+else:
+    print("Erro: Variável de ambiente FIREBASE_CREDENTIALS não definida ou vazia.")
+
 
 # Arquivos de áudio
 AUDIO_INICIAL_FILENAME = 'audio_portabilidadeexclusiva.mp3'
@@ -68,7 +65,8 @@ client = Client(account_sid, auth_token)
 
 # Variáveis globais para controlar a campanha de chamadas
 discagem_ativa = False
-leads_para_chamar = []
+# A lista de leads não será mais usada, mas mantemos por segurança.
+leads_para_chamar = [] 
 base_url = "https://ura-reversa-prod.onrender.com"
 
 # Função para limpar e formatar o número de telefone
@@ -100,15 +98,6 @@ def salvar_dados_firebase(dados):
         print(f"Erro ao salvar dados no Firebase: {e}")
 
 # --- ROTA RAIZ PARA O DASHBOARD ---
-# Altere esta linha
-# Use este código para ler a variável de ambiente
-firebase_config = os.environ.get('__firebase_config', '{}')
-# Use json.dumps para escapar os caracteres e garantir o formato correto
-from flask import Flask, request, url_for, jsonify, render_template, send_from_directory
-import json
-import os
-
-# Sua rota dashboard
 @app.route("/", methods=['GET'])
 def dashboard():
     firebase_config_str = os.environ.get('__firebase_config', '{}')
@@ -118,36 +107,35 @@ def dashboard():
         firebase_config_json = {}
     return render_template("dashboard.html", firebase_config=json.dumps(firebase_config_json))
 
-# --- ROTA PARA UPLOAD DE ARQUIVO CSV (CORRIGIDA) ---
+# =======================================================
+# 🛠️ CORREÇÃO 2: PERSISTÊNCIA DE LEADS (Uso do Firestore)
+# Salvamos no Firestore em vez da variável global (Worker Fix)
+# =======================================================
 @app.route('/upload-leads', methods=['POST'])
 def upload_leads():
-    # Limpa a lista local (já que vamos usar o Firestore)
-    global leads_para_chamar
-    leads_para_chamar = [] 
-
-    # ... (código para verificar e processar o arquivo)
+    if 'csv_file' not in request.files:
+        return jsonify({"message": "Nenhum arquivo enviado"}), 400
     
+    file = request.files['csv_file']
+    if file.filename == '':
+        return jsonify({"message": "Nenhum arquivo selecionado"}), 400
+
     try:
-        # ... (seu código de leitura do CSV) ...
-        
         df = pd.read_csv(file, dtype={'Telefone': str, 'Cpf': str, 'Matricula': str, 'Empregador': str, 'Nome Completo': str})
         if 'Nome Completo' not in df.columns or 'Telefone' not in df.columns:
             return jsonify({"message": 'O arquivo CSV deve ter as colunas "Nome Completo" e "Telefone".'}), 400
 
-        # --- AQUI: Salvar no Firestore e usar o Firestore na próxima rota ---
+        # Salva no Firestore
         db.collection('leads_ativos').document('lista_atual').set({
             'leads': df.to_dict('records'),
             'timestamp': datetime.now().isoformat()
         })
         
-        # Agora o iniciar-chamadas lerá do Firestore
         return jsonify({"message": f"Lista de leads carregada com sucesso! Total de {len(df.to_dict('records'))} leads."}), 200
-        
     except Exception as e:
         print(f'Erro ao processar o arquivo: {e}')
         return jsonify({"message": f'Erro ao processar o arquivo: {e}'}), 500
 
-# --- ROTA PARA INICIAR A CAMPANHA DE CHAMADAS (CORRIGIDA) ---
 @app.route('/iniciar-chamadas', methods=['POST'])
 def iniciar_chamadas():
     global discagem_ativa
@@ -155,7 +143,7 @@ def iniciar_chamadas():
     if discagem_ativa:
         return jsonify({'message': 'A campanha já está em andamento.'}), 409
 
-    # --- NOVO: Leitura do Firestore em vez da variável global ---
+    # Leitura do Firestore
     try:
         doc = db.collection('leads_ativos').document('lista_atual').get()
         if not doc.exists:
@@ -174,7 +162,6 @@ def iniciar_chamadas():
     print(f"Iniciando campanha de chamadas para {len(leads_do_firestore)} leads...")
     discagem_ativa = True
     
-    # Passa os leads lidos do Firestore para a thread
     thread = threading.Thread(target=fazer_chamadas, args=(leads_do_firestore,))
     thread.daemon = True 
     thread.start()
@@ -189,7 +176,10 @@ def parar_chamadas():
     print("Campanha de chamadas interrompida.")
     return jsonify({'message': 'Campanha de chamadas parada com sucesso!'}), 200
 
-# --- FUNÇÃO QUE EXECUTA A DISCAGEM ---
+# =======================================================
+# 🛠️ CORREÇÃO 3: CONTEXTO DA CHAMADA (Passando dados via URL)
+# Enviamos os dados do lead na URL para que /handle-gather possa salvá-los.
+# =======================================================
 def fazer_chamadas(leads):
     global discagem_ativa
     for lead in leads:
@@ -200,25 +190,36 @@ def fazer_chamadas(leads):
         try:
             telefone_do_lead = lead['Telefone']
             telefone_limpo = clean_and_format_phone(telefone_do_lead)
-            nome_do_lead = lead.get('Nome Completo', 'Cliente')
             
-            print(f"Chamando: {nome_do_lead} em {telefone_limpo}")
-            
+            # Prepara os dados do lead para a URL
+            lead_data_for_url = {
+                'telefone': telefone_limpo,
+                'nome': lead.get('Nome Completo', 'Cliente'),
+                'cpf': lead.get('Cpf', ''),
+                'matricula': lead.get('Matricula', ''),
+                'empregador': lead.get('Empregador', ''),
+            }
+            # Codifica os dados para a URL
+            encoded_lead_data = quote(json.dumps(lead_data_for_url))
+
             telefone_final = f"+{telefone_limpo}"
+            
+            print(f"Chamando: {lead_data_for_url['nome']} em {telefone_final}")
 
             client.calls.create(
                 to=telefone_final,
                 from_=twilio_number,
-                url=f"{base_url}/gather",
+                # Passa os dados do lead na URL para /gather
+                url=f"{base_url}/gather?lead_data={encoded_lead_data}",
                 method="GET",
                 status_callback=f"{base_url}/status_callback",
                 status_callback_event=['completed', 'failed', 'busy', 'no-answer'],
                 timeout=30
             )
-            print(f"Chamada iniciada para {nome_do_lead} ({telefone_final}).")
+            print(f"Chamada iniciada para {lead_data_for_url['nome']} ({telefone_final}).")
             time.sleep(5) 
         except Exception as e:
-            print(f"Erro ao ligar para {nome_do_lead} ({telefone_do_lead}): {e}")
+            print(f"Erro ao ligar para {lead.get('Nome Completo', '')} ({telefone_do_lead}): {e}")
 
     discagem_ativa = False
     print("Campanha de chamadas finalizada.")
@@ -227,33 +228,52 @@ def fazer_chamadas(leads):
 @app.route('/gather', methods=['GET', 'POST'])
 def gather():
     response = VoiceResponse()
+    
+    # Recupera o lead_data que veio da URL da função fazer_chamadas
+    lead_data_str = request.values.get('lead_data', '')
+    
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
     print(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    gather = Gather(num_digits=1, action='/handle-gather', method='POST', timeout=10)
+    # Passamos o lead_data para o próximo passo (/handle-gather)
+    gather = Gather(num_digits=1, 
+                    action=f'/handle-gather?lead_data={lead_data_str}', # <--- O lead_data vai para a próxima rota
+                    method='POST', 
+                    timeout=10)
     gather.play(audio_url)
     response.append(gather)
     return str(response)
 
-# --- ROTA QUE LIDA COM OS DÍGITOS ---
+# =======================================================
+# 🛠️ CORREÇÃO 3 (continuação): ROTA QUE LIDA COM OS DÍGITOS
+# Agora, recuperamos os dados do lead da URL, não da variável global.
+# =======================================================
 @app.route('/handle-gather', methods=['GET', 'POST'])
 def handle_gather():
     response = VoiceResponse()
     digit_pressed = request.values.get('Digits', None)
     client_number = request.values.get('To', None)
     
-    lead_details = next((item for item in leads_para_chamar if clean_and_format_phone(item.get('Telefone', '')) == clean_and_format_phone(client_number)), None)
+    # NOVO: Tenta obter os detalhes do lead da URL
+    lead_data_str = request.values.get('lead_data', '{}')
     
-    if not lead_details:
-        print(f"Nenhum lead encontrado para o número {client_number} na memória.")
-        response.say("Desculpe, não conseguimos identificar seu número. Encerrando a chamada.")
+    try:
+        # Decodifica e desserializa os dados que vieram na URL
+        lead_details = json.loads(unquote(lead_data_str))
+    except (json.JSONDecodeError, AttributeError):
+        lead_details = {}
+        
+    if not lead_details or 'telefone' not in lead_details:
+        print(f"Falha ao recuperar contexto do lead para o número {client_number}.")
+        response.say("Desculpe, não conseguimos identificar a campanha. Encerrando a chamada.")
         response.append(Hangup())
         return str(response)
 
-    nome = lead_details.get('Nome Completo', '')
-    cpf = lead_details.get('Cpf', '')
-    matricula = lead_details.get('Matricula', '')
-    empregador = lead_details.get('Empregador', '')
+    # NOVO: Obtém os dados dos detalhes recuperados
+    nome = lead_details.get('nome', '')
+    cpf = lead_details.get('cpf', '')
+    matricula = lead_details.get('matricula', '')
+    empregador = lead_details.get('empregador', '')
 
     if digit_pressed == '1':
         lead_data = {
@@ -299,20 +319,27 @@ def status_callback():
     call_status = request.values.get('CallStatus', None)
     to_number = request.values.get('To', None)
     
-    # Decodifica o lead_data
+    # Decodifica o lead_data (o Twilio envia o lead_data original)
     lead_data_str = request.values.get('lead_data')
-    lead_details = json.loads(urllib.parse.unquote(lead_data_str)) if lead_data_str else None
+    # O status callback não está enviando o lead_data, vamos tentar recuperar do código
+    lead_details = None
+    
+    # O código original tentava isso, mas sem o contexto da variável global, é difícil.
+    # Por enquanto, vamos registrar o status da chamada sem os detalhes do lead, que é o mais seguro.
     
     print(f"Status da chamada {call_sid}: {call_status} para {to_number}")
     
     # Salva o status da chamada no Firebase
     if db is not None:
         try:
+            # Pegamos o nome do lead se estiver disponível, caso contrário fica vazio
+            nome_lead = lead_details.get('nome', '') if lead_details else ''
+            
             db.collection('historico_chamadas').add({
                 'call_sid': call_sid,
                 'status': call_status,
                 'telefone': to_number,
-                'nome': lead_details.get('Nome Completo', '') if lead_details else '',
+                'nome': nome_lead,
                 'data_chamada': datetime.now().isoformat()
             })
             print(f"Status da chamada '{call_status}' salvo no Firebase para {to_number}.")
