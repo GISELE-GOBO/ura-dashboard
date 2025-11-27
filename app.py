@@ -283,6 +283,8 @@ def handle_gather():
 
   # ... (código para obter lead_details, nome, cpf, etc.)
 
+ # ... (código para obter lead_details, nome, cpf, etc.)
+
     # --- Cliente pressionou 1 (Interessado) ---
     if digit_pressed == '1':
         
@@ -315,6 +317,7 @@ def handle_gather():
         response.append(Hangup())
         
     # ... (restante da rota)
+        
     # --- Cliente pressionou 2 (Não interessado) ---
     elif digit_pressed == '2':
         
