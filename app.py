@@ -118,51 +118,65 @@ def dashboard():
         firebase_config_json = {}
     return render_template("dashboard.html", firebase_config=json.dumps(firebase_config_json))
 
-# --- ROTA PARA UPLOAD DE ARQUIVO CSV ---
+# --- ROTA PARA UPLOAD DE ARQUIVO CSV (CORRIGIDA) ---
 @app.route('/upload-leads', methods=['POST'])
 def upload_leads():
+    # Limpa a lista local (já que vamos usar o Firestore)
     global leads_para_chamar
-    if 'csv_file' not in request.files:
-        return jsonify({"message": "Nenhum arquivo enviado"}), 400
-    
-    file = request.files['csv_file']
-    if file.filename == '':
-        return jsonify({"message": "Nenhum arquivo selecionado"}), 400
+    leads_para_chamar = [] 
 
+    # ... (código para verificar e processar o arquivo)
+    
     try:
+        # ... (seu código de leitura do CSV) ...
+        
         df = pd.read_csv(file, dtype={'Telefone': str, 'Cpf': str, 'Matricula': str, 'Empregador': str, 'Nome Completo': str})
         if 'Nome Completo' not in df.columns or 'Telefone' not in df.columns:
             return jsonify({"message": 'O arquivo CSV deve ter as colunas "Nome Completo" e "Telefone".'}), 400
 
-        leads_para_chamar = df.to_dict('records')
-        print(f"Lista de leads carregada. Total de {len(leads_para_chamar)} leads.")
-        return jsonify({"message": f"Lista de leads carregada. Total de {len(leads_para_chamar)} leads."}), 200
+        # --- AQUI: Salvar no Firestore e usar o Firestore na próxima rota ---
+        db.collection('leads_ativos').document('lista_atual').set({
+            'leads': df.to_dict('records'),
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # Agora o iniciar-chamadas lerá do Firestore
+        return jsonify({"message": f"Lista de leads carregada com sucesso! Total de {len(df.to_dict('records'))} leads."}), 200
+        
     except Exception as e:
         print(f'Erro ao processar o arquivo: {e}')
         return jsonify({"message": f'Erro ao processar o arquivo: {e}'}), 500
 
-# --- ROTA PARA INICIAR A CAMPANHA DE CHAMADAS ---
+# --- ROTA PARA INICIAR A CAMPANHA DE CHAMADAS (CORRIGIDA) ---
 @app.route('/iniciar-chamadas', methods=['POST'])
 def iniciar_chamadas():
     global discagem_ativa
-    global leads_para_chamar
 
     if discagem_ativa:
-        print("Tentativa de iniciar uma campanha já ativa.")
         return jsonify({'message': 'A campanha já está em andamento.'}), 409
 
-    if not leads_para_chamar:
-        print("Tentativa de iniciar a campanha sem leads.")
-        return jsonify({'message': 'Nenhum lead carregado. Por favor, carregue uma lista.'}), 400
+    # --- NOVO: Leitura do Firestore em vez da variável global ---
+    try:
+        doc = db.collection('leads_ativos').document('lista_atual').get()
+        if not doc.exists:
+            print("Tentativa de iniciar a campanha sem leads salvos no Firestore.")
+            return jsonify({'message': 'Nenhum lead carregado. Por favor, carregue uma lista.'}), 400
+            
+        leads_do_firestore = doc.to_dict().get('leads', [])
+        
+        if not leads_do_firestore:
+            return jsonify({'message': 'A lista carregada estava vazia.'}), 400
+            
+    except Exception as e:
+        print(f"Erro ao ler leads do Firestore: {e}")
+        return jsonify({'message': 'Erro ao acessar a lista de leads no banco de dados.'}), 500
     
-    print(f"Iniciando campanha de chamadas para {len(leads_para_chamar)} leads...")
-
-    # Define a flag antes de iniciar a thread
+    print(f"Iniciando campanha de chamadas para {len(leads_do_firestore)} leads...")
     discagem_ativa = True
     
-    # Inicia a thread de chamadas
-    thread = threading.Thread(target=fazer_chamadas, args=(leads_para_chamar,))
-    thread.daemon = True # Garante que a thread será encerrada com a aplicação
+    # Passa os leads lidos do Firestore para a thread
+    thread = threading.Thread(target=fazer_chamadas, args=(leads_do_firestore,))
+    thread.daemon = True 
     thread.start()
     
     return jsonify({'message': 'Campanha de chamadas iniciada com sucesso!'}), 200
