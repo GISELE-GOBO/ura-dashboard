@@ -235,14 +235,17 @@ def gather():
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
     print(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    # Passamos o lead_data para o próximo passo (/handle-gather)
-    gather = Gather(num_digits=1, 
-                    action=f'/handle-gather?lead_data={lead_data_str}', # <--- O lead_data vai para a próxima rota
-                    method='POST', 
-                    timeout=10)
-    gather.play(audio_url)
-    response.append(gather)
-    return str(response)
+    # ANTES: Você está passando o lead_data na action.
+gather = Gather(num_digits=1, 
+                action=f'/handle-gather?lead_data={lead_data_str}', # <--- O lead_data vai para a próxima rota
+                method='POST', 
+                timeout=10)
+
+# Altere para o código abaixo:
+gather = Gather(num_digits=1, 
+                action=f'{base_url}/handle-gather?lead_data={lead_data_str}', # <--- Use o base_url completo para a action
+                method='POST', 
+                timeout=10)
 
 # =======================================================
 # 🛠️ CORREÇÃO 3 (continuação): ROTA QUE LIDA COM OS DÍGITOS
@@ -276,19 +279,29 @@ def handle_gather():
     empregador = lead_details.get('empregador', '')
 
     if digit_pressed == '1':
+        
+        # 🔔 Adicionamos log para ver se os dados estão vindo
+        print(f"DEBUG: Dados do lead recuperados para salvar (Digito 1): {lead_details}")
+        
         lead_data = {
             "telefone": clean_and_format_phone(client_number),
             "digito_pressionado": digit_pressed,
             "nome": nome,
             "cpf": cpf,
             "matricula": matricula,
-            "empregador": empregador
+            "empregador": empregador,
+            "data_interesse": datetime.now().isoformat() # Adicionando data de interesse
         }
+        
+        # Salva o lead no Firebase
         salvar_dados_firebase(lead_data)
         
+        # Resposta de sucesso
         audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
         response.play(audio_url)
         response.append(Hangup())
+        
+    # O restante da função handle_gather continua
 
     elif digit_pressed == '2':
         response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
