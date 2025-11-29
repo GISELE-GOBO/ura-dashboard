@@ -247,102 +247,85 @@ def gather():
     return str(response)
 
 # =======================================================
-# 🛠️ CORREÇÃO CRÍTICA 2: ROTA HANDLE-GATHER OTIMIZADA
-# Usando lead_telefone do contexto e chamada robusta de salvamento.
+# 🚨 ROTA DE EMERGÊNCIA: HANDLE-GATHER (GARANTIA DE LOG)
 # =======================================================
 @app.route('/handle-gather', methods=['GET', 'POST'])
 def handle_gather():
     response = VoiceResponse()
-    digit_pressed = request.values.get('Digits', None)
     
-    lead_data_str = request.values.get('lead_data', '{}')
-    
-    # Tenta decodificar o lead_data
+    # Bloco try/except de nível superior para capturar QUALQUER erro
     try:
-        lead_details = json.loads(unquote(lead_data_str))
-    except (json.JSONDecodeError, AttributeError, TypeError) as e:
-        lead_details = {}
-        print(f"ERRO DE CONTEXTO: Falha ao decodificar lead_data: {e}")
+        digit_pressed = request.values.get('Digits', None)
+        lead_data_str = request.values.get('lead_data', '{}')
         
-    # --- Verificação de Contexto Crítica ---
-    lead_telefone = lead_details.get('telefone', '')
-    
-    # LOG CRÍTICO para debug ANTES de qualquer salvamento
-    print(f"DEBUG /handle-gather: Digito: {digit_pressed}, Telefone Lead (Contexto): {lead_telefone}, Dados Detalhados: {lead_details}")
+        # 1. TENTA DECODIFICAR O CONTEXTO
+        try:
+            lead_details = json.loads(unquote(lead_data_str))
+        except Exception as e:
+            lead_details = {}
+            print(f"ERRO DE CONTEXTO (DECODE): Falha ao decodificar lead_data: {e}")
+            
+        # 2. EXTRAI OS DADOS (Com fallback para evitar quebra)
+        lead_telefone = lead_details.get('telefone', '')
+        nome = lead_details.get('nome', 'N/A')
+        cpf = lead_details.get('cpf', 'N/A')
+        matricula = lead_details.get('matricula', 'N/A')
+        empregador = lead_details.get('empregador', 'N/A')
+
+        # LOG CRÍTICO para debug
+        print(f"DEBUG /handle-gather: Digito: {digit_pressed}, Telefone Lead: {lead_telefone}, Nome: {nome}")
+            
+        if not lead_telefone:
+            raise ValueError("Telefone do lead não encontrado no contexto.")
         
-    if not lead_telefone:
-        print("Falha ao recuperar telefone do lead no contexto. Encerrando a chamada.")
-        response.say("Desculpe, não conseguimos identificar a campanha. Encerrando a chamada.")
+        # 3. PROCESSA O DÍGITO '1'
+        if digit_pressed == '1':
+            
+            lead_data = {
+                "telefone": lead_telefone,
+                "digito_pressionado": digit_pressed,
+                "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador,
+                "data_interesse": datetime.now().isoformat()
+            }
+            
+            salvamento_ok = salvar_dados_firebase(lead_data) # Chama a função robusta
+
+            audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
+            response.play(audio_url)
+            
+            if not salvamento_ok:
+                response.say("Ocorreu um erro ao registrar sua opção. Tente novamente mais tarde.", voice="Vitoria", language="pt-BR")
+                
+            response.append(Hangup())
+
+        # 4. PROCESSA O DÍGITO '2'
+        elif digit_pressed == '2':
+            lead_data = {
+                "telefone": lead_telefone,
+                "digito_pressionado": digit_pressed,
+                "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador,
+                "data_interesse": datetime.now().isoformat()
+            }
+            salvamento_ok = salvar_dados_firebase(lead_data)
+            
+            response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
+            response.append(Hangup())
+
+        # 5. TIMEOUT/OPÇÃO INVÁLIDA
+        else:
+            print(f"Cliente {lead_telefone} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
+            response.say("Opção inválida ou tempo esgotado. Encerrando.", voice="Vitoria", language="pt-BR")
+            response.append(Hangup())
+
+        return str(response)
+        
+    # ESTE BLOCO É O NOVO E CRÍTICO PARA DEBUGAR
+    except Exception as general_e:
+        print(f"ERRO FATAL NA ROTA HANDLE-GATHER: {general_e}")
+        # Retorna um TwiML válido (200 OK) para evitar o "Sorry, Goodbye"
+        response.say("Desculpe, houve um erro interno do sistema. Encerrando.", voice="Vitoria", language="pt-BR")
         response.append(Hangup())
         return str(response)
-
-    nome = lead_details.get('nome', '')
-    cpf = lead_details.get('cpf', '')
-    matricula = lead_details.get('matricula', '')
-    empregador = lead_details.get('empregador', '')
-
-  # ... (código para obter lead_details, nome, cpf, etc.)
-
- # ... (código para obter lead_details, nome, cpf, etc.)
-
-    # --- Cliente pressionou 1 (Interessado) ---
-    if digit_pressed == '1':
-        
-        # O lead_telefone JÁ ESTÁ LIMPO do contexto (veio da fazer_chamadas)
-        lead_telefone = lead_details.get('telefone', '') 
-        
-        lead_data = {
-            "telefone": lead_telefone, 
-            "digito_pressionado": digit_pressed,
-            "nome": nome,
-            "cpf": cpf,
-            "matricula": matricula,
-            "empregador": empregador,
-            "data_interesse": datetime.now().isoformat()
-        }
-        
-        # LOG CRÍTICO ANTES DE TENTAR SALVAR
-        print(f"DEBUG /handle-gather: Preparando para salvar digito 1. Dados: {lead_data}")
-        
-        salvamento_ok = salvar_dados_firebase(lead_data) # Chama a função robusta
-        
-        # Resposta de sucesso (não depende do sucesso do Firebase)
-        audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
-        response.play(audio_url)
-        
-        if not salvamento_ok:
-            # Dá um aviso ao cliente, mas a chamada termina corretamente (Hangup).
-            response.say("Ocorreu um erro ao registrar sua opção. Mas o sistema tentará processar em breve.", voice="Vitoria", language="pt-BR")
-            
-        response.append(Hangup())
-        
-    # ... (restante da rota)
-        
-    # --- Cliente pressionou 2 (Não interessado) ---
-    elif digit_pressed == '2':
-        
-        lead_data = {
-            "telefone": lead_telefone, # Usa o telefone limpo do contexto
-            "digito_pressionado": digit_pressed,
-            "nome": nome,
-            "cpf": cpf,
-            "matricula": matricula,
-            "empregador": empregador,
-            "data_interesse": datetime.now().isoformat()
-        }
-        
-        salvar_dados_firebase(lead_data) # Chama a função robusta
-        
-        response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
-        response.append(Hangup())
-    
-    # --- Timeout ou Opção Inválida ---
-    else:
-        print(f"Cliente {lead_telefone} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
-        response.say("Opção inválida ou tempo esgotado. Encerrando.", voice="Vitoria", language="pt-BR")
-        response.append(Hangup())
-
-    return str(response)
 
 # --- ROTA PARA RECEBER STATUS DAS CHAMADAS ---
 @app.route('/status_callback', methods=['GET', 'POST'])
