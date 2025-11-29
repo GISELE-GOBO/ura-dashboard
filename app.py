@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, url_for, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory
 import pandas as pd
-from twilio.twiml.voice_response import VoiceResponse, Gather, Hangup, Redirect
+from twilio.twiml.voice_response import VoiceResponse, Gather, Hangup, Redirect, Play
 from twilio.rest import Client
 import logging
 import sys
 import os
 import time
-from urllib.parse import quote, unquote # Importamos unquote para decodificar a URL
-import requests
+from urllib.parse import quote, unquote
 import threading
 from dotenv import load_dotenv
 from datetime import datetime
-import json # Importamos JSON para lidar com a chave da variável de ambiente
-
-# Importa as bibliotecas do Firebase
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -31,62 +28,59 @@ try:
     auth_token = os.environ["TWILIO_AUTH_TOKEN"]
     twilio_number = os.environ["TWILIO_PHONE_NUMBER"]
 except KeyError as e:
-    print(f"Erro: Variável de ambiente não encontrada: {e}")
-    exit(1)
+    logger.error(f"Erro: Variável de ambiente não encontrada: {e}")
+    sys.exit(1)
 
 # =======================================================
 # FIREBASE CONNECTION SETUP
 # =======================================================
 db = None
-firebase_credentials_json = os.environ.get('FIREBASE_CREDENTIALS')
+firebase_credentials_json = os.environ.get('FIREBASE_CREDENTIALS_JSON') # Ajuste do nome da variável
 
 if firebase_credentials_json:
     try:
-        # Carrega o JSON da variável de ambiente
         cred_data = json.loads(firebase_credentials_json)
         cred = credentials.Certificate(cred_data)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
-        print("Conexão com o Firebase estabelecida com sucesso usando a variável de ambiente.")
+        logger.info("Conexão com o Firebase estabelecida com sucesso usando a variável de ambiente.")
     except Exception as e:
-        print(f"Erro ao inicializar o Firebase com variável de ambiente: {e}")
+        logger.error(f"Erro ao inicializar o Firebase: {e}")
+        sys.exit(1)
 else:
-    print("Erro: Variável de ambiente FIREBASE_CREDENTIALS não definida ou vazia.")
+    logger.error("Erro: Variável de ambiente FIREBASE_CREDENTIALS_JSON não definida ou vazia.")
+    sys.exit(1)
 
 
 # Arquivos de áudio
 AUDIO_INICIAL_FILENAME = 'audio_portabilidadeexclusiva.mp3'
 AUDIO_CONTINUAR_FILENAME = 'audio_continuarinbursa.mp3'
-AUDIO_NAO_ATENDEU_FILENAME = 'audio_nao_atendeu.mp3'
 
 # Configuração do cliente Twilio
 client = Client(account_sid, auth_token)
 
 # Variáveis globais para controlar a campanha de chamadas
 discagem_ativa = False
-leads_para_chamar = [] 
 base_url = "https://ura-reversa-prod.onrender.com"
 
-# Função para limpar e formatar o número de telefone (USADA APENAS NO INÍCIO DA CHAMADA)
+# Função para limpar e formatar o número de telefone
 def clean_and_format_phone(phone_str):
     clean = ''.join(c for c in str(phone_str) if c.isdigit())
-    # Garante que o número tenha o DDI (55)
     if not clean.startswith('55') and (len(clean) == 10 or len(clean) == 11):
         return '55' + clean
     return clean
 
 # =======================================================
-# 🛠️ CORREÇÃO CRÍTICA 1: SALVAMENTO NO FIREBASE ROBUSTO
-# Adicionado retorno True/False e try/except para evitar falha no servidor (HTTP 500).
+# 🛠️ SALVAMENTO NO FIREBASE ROBUSTO
 # =======================================================
 def salvar_dados_firebase(dados):
     global db
     if db is None:
-        print("Erro: A conexão com o Firebase não está ativa.")
-        return False # Retorna False em caso de falha de conexão.
+        logger.error("Erro: A conexão com o Firebase não está ativa.")
+        return False
     try:
         leads_collection_ref = db.collection('leads_interessados')
-        print(f"Tentando salvar no Firebase: {dados}") # Log para debug
+        logger.debug(f"Tentando salvar no Firebase: {dados.get('telefone')}")
         
         leads_collection_ref.add({
             'telefone': dados.get('telefone', 'N/A'),
@@ -97,22 +91,16 @@ def salvar_dados_firebase(dados):
             'digito_pressionado': dados.get('digito_pressionado', 'N/A'),
             'data_interesse': dados.get('data_interesse', datetime.now().isoformat())
         })
-        print(f"Dados salvos no Firebase com SUCESSO para o telefone: {dados.get('telefone')}")
-        return True # Retorna True em caso de sucesso.
+        logger.info(f"Dados salvos no Firebase com SUCESSO para o telefone: {dados.get('telefone')}")
+        return True
     except Exception as e:
-        # Se houver falha (permissão, etc.), o erro aparece no log.
-        print(f"ERRO CRÍTICO no Firebase: Falha ao salvar dados: {e}") 
-        return False # Retorna False, o servidor não quebra.
+        logger.error(f"ERRO CRÍTICO no Firebase: Falha ao salvar dados: {e}") 
+        return False
 
-# --- ROTA RAIZ PARA O DASHBOARD ---
+# --- ROTAS ADMINISTRATIVAS ---
 @app.route("/", methods=['GET'])
 def dashboard():
-    firebase_config_str = os.environ.get('__firebase_config', '{}')
-    try:
-        firebase_config_json = json.loads(firebase_config_str)
-    except json.JSONDecodeError:
-        firebase_config_json = {}
-    return render_template("dashboard.html", firebase_config=json.dumps(firebase_config_json))
+    return render_template("dashboard.html")
 
 @app.route('/upload-leads', methods=['POST'])
 def upload_leads():
@@ -136,7 +124,7 @@ def upload_leads():
         
         return jsonify({"message": f"Lista de leads carregada com sucesso! Total de {len(df.to_dict('records'))} leads."}), 200
     except Exception as e:
-        print(f'Erro ao processar o arquivo: {e}')
+        logger.error(f'Erro ao processar o arquivo: {e}')
         return jsonify({"message": f'Erro ao processar o arquivo: {e}'}), 500
 
 @app.route('/iniciar-chamadas', methods=['POST'])
@@ -150,7 +138,6 @@ def iniciar_chamadas():
     try:
         doc = db.collection('leads_ativos').document('lista_atual').get()
         if not doc.exists:
-            print("Tentativa de iniciar a campanha sem leads salvos no Firestore.")
             return jsonify({'message': 'Nenhum lead carregado. Por favor, carregue uma lista.'}), 400
             
         leads_do_firestore = doc.to_dict().get('leads', [])
@@ -159,10 +146,10 @@ def iniciar_chamadas():
             return jsonify({'message': 'A lista carregada estava vazia.'}), 400
             
     except Exception as e:
-        print(f"Erro ao ler leads do Firestore: {e}")
+        logger.error(f"Erro ao ler leads do Firestore: {e}")
         return jsonify({'message': 'Erro ao acessar a lista de leads no banco de dados.'}), 500
     
-    print(f"Iniciando campanha de chamadas para {len(leads_do_firestore)} leads...")
+    logger.info(f"Iniciando campanha de chamadas para {len(leads_do_firestore)} leads...")
     discagem_ativa = True
     
     thread = threading.Thread(target=fazer_chamadas, args=(leads_do_firestore,))
@@ -171,12 +158,11 @@ def iniciar_chamadas():
     
     return jsonify({'message': 'Campanha de chamadas iniciada com sucesso!'}), 200
 
-# --- ROTA PARA PARAR A CAMPANHA DE CHAMADAS ---
 @app.route('/parar-chamadas', methods=['POST'])
 def parar_chamadas():
     global discagem_ativa
     discagem_ativa = False
-    print("Campanha de chamadas interrompida.")
+    logger.info("Campanha de chamadas interrompida.")
     return jsonify({'message': 'Campanha de chamadas parada com sucesso!'}), 200
 
 # --- FUNÇÃO QUE EXECUTA A DISCAGEM ---
@@ -184,7 +170,7 @@ def fazer_chamadas(leads):
     global discagem_ativa
     for lead in leads:
         if not discagem_ativa:
-            print("Processo de chamadas interrompido manualmente.")
+            logger.info("Processo de chamadas interrompido manualmente.")
             break
             
         try:
@@ -193,18 +179,17 @@ def fazer_chamadas(leads):
             
             # Prepara os dados do lead para a URL
             lead_data_for_url = {
-                'telefone': telefone_limpo, # Telefone JÁ LIMPO E FORMATADO (55XXXXXXXXXX)
+                'telefone': telefone_limpo, 
                 'nome': lead.get('Nome Completo', 'Cliente'),
                 'cpf': lead.get('Cpf', ''),
                 'matricula': lead.get('Matricula', ''),
                 'empregador': lead.get('Empregador', ''),
             }
-            # Codifica os dados para a URL
             encoded_lead_data = quote(json.dumps(lead_data_for_url))
 
             telefone_final = f"+{telefone_limpo}"
             
-            print(f"Chamando: {lead_data_for_url['nome']} em {telefone_final}")
+            logger.info(f"Chamando: {lead_data_for_url['nome']} em {telefone_final}")
 
             client.calls.create(
                 to=telefone_final,
@@ -216,40 +201,45 @@ def fazer_chamadas(leads):
                 status_callback_event=['completed', 'failed', 'busy', 'no-answer'],
                 timeout=30
             )
-            print(f"Chamada iniciada para {lead_data_for_url['nome']} ({telefone_final}).")
+            logger.info(f"Chamada iniciada para {lead_data_for_url['nome']} ({telefone_final}).")
             time.sleep(5) 
         except Exception as e:
-            print(f"Erro ao ligar para {lead.get('Nome Completo', '')} ({telefone_do_lead}): {e}")
+            logger.error(f"Erro ao ligar para {lead.get('Nome Completo', '')} ({telefone_do_lead}): {e}")
 
     discagem_ativa = False
-    print("Campanha de chamadas finalizada.")
+    logger.info("Campanha de chamadas finalizada.")
 
-# --- ROTA GATHER ---
+# =======================================================
+# ROTAS TWILIO (WEBHOOKS)
+# =======================================================
+
+# 🛠️ ROTA /gather (Com Indentação e Action/Redirect Corrigidos)
 @app.route('/gather', methods=['GET', 'POST'])
 def gather():
     response = VoiceResponse()
     lead_data_str = request.values.get('lead_data', '')
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
-    print(f"Tentando reproduzir áudio inicial: {audio_url}")
+    logger.debug(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    # CRIA A TAG GATHER COM A URL ABSOLUTA
-    # NOVO CÓDIGO (TESTE DEFINITIVO)
-gather = Gather(num_digits=1, 
-                action=f'{base_url}/handle-gather', # REMOVEMOS O CONTEXTO!
-                method='POST', 
-                timeout=20)
+    # CRIA A TAG GATHER COM A URL ABSOLUTA E PASSA O CONTEXTO AQUI
+    gather = Gather(num_digits=1, 
+                    action=f'{base_url}/handle-gather?lead_data={lead_data_str}', 
+                    method='POST', 
+                    timeout=20)
     
     gather.play(audio_url)
     response.append(gather)
     
-    # REDIRECIONA EM CASO DE TIMEOUT/FALHA
-    response.redirect(f'{base_url}/handle-gather?lead_data={lead_data_str}') 
+    # ❌ REMOVIDO: O Redirect logo abaixo do Gather era redundante e estava causando falhas. 
+    # O Twilio envia o POST para o action em caso de digito OU timeout.
+
+    # Adiciona um Hangup/Say para o caso improvável de falha do Twilio.
+    response.say("Não recebemos sua opção. Encerrando.", voice="Vitoria", language="pt-BR")
+    response.append(Hangup())
     
     return str(response)
 
-# =======================================================
-# 🚨 ROTA DE EMERGÊNCIA: HANDLE-GATHER (GARANTIA DE LOG)
-# =======================================================
+# 🚨 ROTA DE EMERGÊNCIA: HANDLE-GATHER (GARANTIA DE LOG e 200 OK)
 @app.route('/handle-gather', methods=['GET', 'POST'])
 def handle_gather():
     response = VoiceResponse()
@@ -260,36 +250,38 @@ def handle_gather():
         lead_data_str = request.values.get('lead_data', '{}')
         
         # 1. TENTA DECODIFICAR O CONTEXTO
+        # A Twilio pode ter feito o unquote, mas mantemos o try/except por segurança.
         try:
-            lead_details = json.loads(unquote(lead_data_str))
+            lead_details = json.loads(unquote(lead_data_str)) 
         except Exception as e:
             lead_details = {}
-            print(f"ERRO DE CONTEXTO (DECODE): Falha ao decodificar lead_data: {e}")
+            logger.error(f"ERRO DE CONTEXTO (DECODE): Falha ao decodificar lead_data: {e}")
             
         # 2. EXTRAI OS DADOS (Com fallback para evitar quebra)
-        lead_telefone = lead_details.get('telefone', '')
+        # O telefone mais confiável é o 'To' da requisição da Twilio
+        lead_telefone = request.values.get('To', '').replace('+', '')
+        if not lead_telefone:
+            lead_telefone = lead_details.get('telefone', '')
+            
         nome = lead_details.get('nome', 'N/A')
         cpf = lead_details.get('cpf', 'N/A')
-        matricula = lead_details.get('matricula', 'N/A')
-        empregador = lead_details.get('empregador', 'N/A')
-
+        
         # LOG CRÍTICO para debug
-        print(f"DEBUG /handle-gather: Digito: {digit_pressed}, Telefone Lead: {lead_telefone}, Nome: {nome}")
+        logger.debug(f"DEBUG /handle-gather: Digito: {digit_pressed}, Telefone Lead: {lead_telefone}, Nome: {nome}")
             
         if not lead_telefone:
-            raise ValueError("Telefone do lead não encontrado no contexto.")
+            raise ValueError("Telefone do lead não encontrado. Contexto de dados perdido.")
         
-        # 3. PROCESSA O DÍGITO '1'
+        # 3. PROCESSA O DÍGITO '1' (Interessado)
         if digit_pressed == '1':
             
             lead_data = {
-                "telefone": lead_telefone,
-                "digito_pressionado": digit_pressed,
-                "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador,
+                "telefone": lead_telefone, "digito_pressionado": digit_pressed,
+                "nome": nome, "cpf": cpf,
                 "data_interesse": datetime.now().isoformat()
             }
             
-            salvamento_ok = salvar_dados_firebase(lead_data) # Chama a função robusta
+            salvamento_ok = salvar_dados_firebase(lead_data)
 
             audio_url = f"{base_url}/static/{AUDIO_CONTINUAR_FILENAME}"
             response.play(audio_url)
@@ -299,12 +291,11 @@ def handle_gather():
                 
             response.append(Hangup())
 
-        # 4. PROCESSA O DÍGITO '2'
+        # 4. PROCESSA O DÍGITO '2' (Não interessado)
         elif digit_pressed == '2':
             lead_data = {
-                "telefone": lead_telefone,
-                "digito_pressionado": digit_pressed,
-                "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador,
+                "telefone": lead_telefone, "digito_pressionado": digit_pressed,
+                "nome": nome, "cpf": cpf,
                 "data_interesse": datetime.now().isoformat()
             }
             salvamento_ok = salvar_dados_firebase(lead_data)
@@ -314,15 +305,15 @@ def handle_gather():
 
         # 5. TIMEOUT/OPÇÃO INVÁLIDA
         else:
-            print(f"Cliente {lead_telefone} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
+            logger.info(f"Cliente {lead_telefone} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
             response.say("Opção inválida ou tempo esgotado. Encerrando.", voice="Vitoria", language="pt-BR")
             response.append(Hangup())
 
         return str(response)
         
-    # ESTE BLOCO É O NOVO E CRÍTICO PARA DEBUGAR
+    # ESTE BLOCO GARANTE QUE O FLASK NUNCA RETORNE 500
     except Exception as general_e:
-        print(f"ERRO FATAL NA ROTA HANDLE-GATHER: {general_e}")
+        logger.error(f"ERRO FATAL NA ROTA HANDLE-GATHER: {general_e}")
         # Retorna um TwiML válido (200 OK) para evitar o "Sorry, Goodbye"
         response.say("Desculpe, houve um erro interno do sistema. Encerrando.", voice="Vitoria", language="pt-BR")
         response.append(Hangup())
@@ -335,7 +326,7 @@ def status_callback():
     call_status = request.values.get('CallStatus', None)
     to_number = request.values.get('To', None)
     
-    print(f"Status da chamada {call_sid}: {call_status} para {to_number}")
+    logger.info(f"Status da chamada {call_sid}: {call_status} para {to_number}")
     
     if db is not None:
         try:
@@ -345,13 +336,10 @@ def status_callback():
                 'telefone': to_number,
                 'data_chamada': datetime.now().isoformat()
             })
-            print(f"Status da chamada '{call_status}' salvo no Firebase para {to_number}.")
+            logger.info(f"Status da chamada '{call_status}' salvo no Firebase para {to_number}.")
         except Exception as e:
-            print(f"Erro ao salvar o status da chamada no Firebase: {e}")
+            logger.error(f"Erro ao salvar o status da chamada no Firebase: {e}")
             
-    if call_status in ['no-answer', 'busy', 'failed']:
-        print("Chamada não atendida/ocupada. Nenhuma ação será tomada.")
-        
     return '', 200
 
 # Rota para servir arquivos estáticos
