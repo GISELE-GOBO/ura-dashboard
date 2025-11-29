@@ -232,16 +232,20 @@ def gather():
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
     logger.debug(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    # 💥 CORREÇÃO CRÍTICA: Indentação e URL Simplificado no action
-    # O action agora tem apenas o essencial para evitar o "Sorry, Goodbye", 
-    # e o lead_data_str é passado como um query param.
+    # 💥 CORREÇÃO CRÍTICA AQUI: AUMENTAR O TIMEOUT PARA COBRIR O ÁUDIO DE 40s
     gather = Gather(num_digits=1, 
                     action=f'{base_url}/handle-gather?lead_data={lead_data_str}', 
                     method='POST', 
-                    timeout=20)
+                    timeout=60) # <--- MUDANÇA: Aumentado para 60 segundos
     
     gather.play(audio_url)
     response.append(gather)
+    
+    # Se ocorrer um erro antes do gather, Twilio deve dizer algo e desligar
+    response.say("Não recebemos sua opção. A ligação será encerrada.", voice="Vitoria", language="pt-BR")
+    response.append(Hangup())
+    
+    return str(response)
     
     # A Twilio segue o action em caso de digito ou timeout. 
     # Um Redirect aqui é desnecessário e pode causar looping.
