@@ -233,10 +233,11 @@ def gather():
     print(f"Tentando reproduzir áudio inicial: {audio_url}")
     
     # CRIA A TAG GATHER COM A URL ABSOLUTA
-    gather = Gather(num_digits=1, 
-                    action=f'{base_url}/handle-gather?lead_data={lead_data_str}', 
-                    method='POST', 
-                    timeout=20) 
+    # NOVO CÓDIGO (TESTE DEFINITIVO)
+gather = Gather(num_digits=1, 
+                action=f'{base_url}/handle-gather', # REMOVEMOS O CONTEXTO!
+                method='POST', 
+                timeout=20)
     
     gather.play(audio_url)
     response.append(gather)
