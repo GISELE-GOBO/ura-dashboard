@@ -114,6 +114,12 @@ def dashboard():
     except json.JSONDecodeError:
         firebase_config_json = {}
     return render_template("dashboard.html", firebase_config=json.dumps(firebase_config_json))
+  
+# --- ROTA SIMPLES PARA HEALTH CHECK ---
+@app.route('/health', methods=['GET'])
+def health_check():
+    # Isso retorna imediatamente, garantindo que o Render saiba que o serviço está UP
+    return "OK", 200
 
 @app.route('/upload-leads', methods=['POST'])
 def upload_leads():
