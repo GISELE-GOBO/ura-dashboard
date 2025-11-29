@@ -238,18 +238,18 @@ def gather():
     audio_url = f"{base_url}/static/{AUDIO_INICIAL_FILENAME}"
     logger.debug(f"Tentando reproduzir áudio inicial: {audio_url}")
     
-    # 💥 CORREÇÃO CRÍTICA AQUI: AUMENTAR O TIMEOUT PARA COBRIR O ÁUDIO DE 40s
+    # TIMEOUT AJUSTADO: 45 segundos (40s de áudio + 5s de margem)
     gather = Gather(num_digits=1, 
                     action=f'{base_url}/handle-gather?lead_data={lead_data_str}', 
                     method='POST', 
-                    timeout=60) # <--- MUDANÇA: Aumentado para 60 segundos
+                    timeout=45) # <--- MUDANÇA APLICADA AQUI
     
     gather.play(audio_url)
     response.append(gather)
     
-    # Se ocorrer um erro antes do gather, Twilio deve dizer algo e desligar
-    response.say("Não recebemos sua opção. A ligação será encerrada.", voice="Vitoria", language="pt-BR")
-    response.append(Hangup())
+    # Esta linha garante que, mesmo após o timeout, a requisição vá para /handle-gather
+    # (em vez de cair no "Sorry, Goodbye" do Twilio)
+    response.redirect(f'{base_url}/handle-gather?lead_data={lead_data_str}')
     
     return str(response)
     
