@@ -302,4 +302,11 @@ def handle_gather():
             response.play(audio_url)
             
             if not salvamento_ok:
-                response.say("
+                # O texto que faltava e o fechamento da string e dos parâmetros!
+                response.say("Ocorreu um erro ao registrar sua opção. Tente novamente mais tarde.", voice="Vitoria", language="pt-BR")
+                
+            response.append(Hangup())
+
+        # 4. PROCESSA O DÍGITO '2'
+        elif digit_pressed == '2':
+# ... e o restante do seu código
