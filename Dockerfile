@@ -1,20 +1,19 @@
-# Usa a imagem base oficial do Python (3.11 Slim é otimizada)
+# Usa a imagem base recomendada do Google Cloud para Flask/Python
 FROM python:3.11-slim
-
-# ADICIONE ESTAS DUAS LINHAS: Instala ferramentas de compilação
-RUN apt-get update && apt-get install -y build-essential
 
 # Define o diretório de trabalho dentro do container
 WORKDIR /app
 
 # Copia o arquivo de requisitos e instala as dependências
 COPY requirements.txt .
+
+# Instala todas as dependências do Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o resto da sua aplicação para o diretório de trabalho
+# Copia o restante da sua aplicação
 COPY . .
 
-# Expõe a porta que o Gunicorn vai usar (deve ser 8080 no Cloud Run)
+# Expõe a porta que o Cloud Run exige
 ENV PORT 8080
 
 # Comando para iniciar o servidor Gunicorn
