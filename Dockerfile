@@ -9,7 +9,7 @@ WORKDIR /app
 
 # COPIA CRÍTICA: Garante que a chave JSON esteja no WORKDIR antes da instalação
 # O nome do arquivo JSON deve ser EXATAMENTE o mesmo que está na sua pasta.
-COPY ura-dashboard-firebase-adminsdk-fbsvc-c0caccb1e2.json
+COPY ura-dashboard-firebase-adminsdk-fbsvc-c0caccb1e2.json .
 
 # Copia e instala as dependências
 COPY requirements.txt .
@@ -23,4 +23,5 @@ ENV PORT 8080
 
 # Comando para iniciar o servidor Gunicorn
 CMD exec gunicorn --bind :$PORT --workers=1 --threads=8 --timeout=120 --graceful-timeout=120 --max-requests=200 --max-requests-jitter=30 app:app
+
 
