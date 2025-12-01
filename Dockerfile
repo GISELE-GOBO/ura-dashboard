@@ -1,13 +1,14 @@
-# Usa a imagem base recomendada do Google Cloud para Flask/Python
-FROM python:3.11-slim
+# Usa a imagem base do Python (mais completa)
+FROM python:3.11
 
-# Define o diretório de trabalho dentro do container
+# Instala ferramentas essenciais de compilação
+RUN apt-get update && apt-get install -y build-essential
+
+# Define o diretório de trabalho
 WORKDIR /app
 
-# Copia o arquivo de requisitos e instala as dependências
+# Copia e instala as dependências
 COPY requirements.txt .
-
-# Instala todas as dependências do Python
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o restante da sua aplicação
