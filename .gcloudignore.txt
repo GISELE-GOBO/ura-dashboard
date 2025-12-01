@@ -1,0 +1,10 @@
+# Exclui arquivos de ambiente virtual e cache
+.venv
+venv
+__pycache__
+
+# Exclui arquivos específicos do Docker e Git
+.git
+.gitignore
+Dockerfile
+.dockerignore
