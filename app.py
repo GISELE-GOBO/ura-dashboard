@@ -7,12 +7,12 @@ import logging
 import sys
 import os
 import time
-from urllib.parse import quote, unquote # Importamos unquote para decodificar a URL
+from urllib.parse import quote, unquote
 import requests
 import threading
 from dotenv import load_dotenv
 from datetime import datetime
-import json # Importamos JSON para lidar com a chave da variável de ambiente
+import json
 
 # Importa as bibliotecas do Firebase
 import firebase_admin
@@ -30,32 +30,37 @@ try:
     account_sid = os.environ["TWILIO_ACCOUNT_SID"]
     auth_token = os.environ["TWILIO_AUTH_TOKEN"]
     twilio_number = os.environ["TWILIO_PHONE_NUMBER"]
+    base_url = os.environ["BASE_URL"] # Melhor ler o BASE_URL da variável de ambiente
 except KeyError as e:
     logger.error(f"Erro: Variável de ambiente não encontrada: {e}")
     sys.exit(1)
 
 # =======================================================
-# FIREBASE CONNECTION SETUP
+# 🚨 CORREÇÃO CRÍTICA: SETUP DE CONEXÃO COM FIREBASE NO CLOUD RUN
 # =======================================================
 db = None
-# ATENÇÃO: Corrigido o nome da variável para o que estava no SEU código anterior.
-firebase_credentials_json = os.environ.get('FIREBASE_CREDENTIALS') 
+# A variável que passamos no deploy é FIREBASE_SERVICE_ACCOUNT_PATH
+firebase_key_filename = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH')
 
-if firebase_credentials_json:
+if firebase_key_filename:
     try:
-        # Carrega o JSON da variável de ambiente
-        cred_data = json.loads(firebase_credentials_json)
-        cred = credentials.Certificate(cred_data)
+        # CONSTRÓI O CAMINHO ABSOLUTO: /app é o WORKDIR no Dockerfile
+        # Se o arquivo JSON for 'minha-chave.json', o caminho será '/app/minha-chave.json'
+        FIREBASE_PATH = os.path.join('/app', firebase_key_filename)
+        
+        # O código agora espera o caminho do arquivo, não o conteúdo JSON
+        cred = credentials.Certificate(FIREBASE_PATH)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
-        logger.info("Conexão com o Firebase estabelecida com sucesso usando a variável de ambiente.")
+        logger.info("Conexão com o Firebase estabelecida com sucesso usando o arquivo JSON.")
     except Exception as e:
-        logger.error(f"Erro ao inicializar o Firebase com variável de ambiente: {e}")
+        logger.error(f"Erro ao inicializar o Firebase com o arquivo JSON: {e}")
+        logger.error(f"Caminho procurado: {FIREBASE_PATH}")
         sys.exit(1) # Finaliza a execução se o Firebase não inicializar
 else:
-    logger.error("Erro: Variável de ambiente FIREBASE_CREDENTIALS não definida ou vazia.")
+    logger.error("Erro: Variável FIREBASE_SERVICE_ACCOUNT_PATH não definida ou vazia.")
     sys.exit(1) # Finaliza a execução se a variável estiver ausente
-
+# =======================================================
 
 # Arquivos de áudio
 AUDIO_INICIAL_FILENAME = 'audio_portabilidadeexclusiva.mp3'
@@ -67,8 +72,7 @@ client = Client(account_sid, auth_token)
 
 # Variáveis globais para controlar a campanha de chamadas
 discagem_ativa = False
-leads_para_chamar = [] 
-base_url = "https://ura-reversa-prod.onrender.com"
+leads_para_chamar = []
 
 # Função para limpar e formatar o número de telefone (USADA APENAS NO INÍCIO DA CHAMADA)
 def clean_and_format_phone(phone_str):
@@ -105,20 +109,15 @@ def salvar_dados_firebase(dados):
         logger.error(f"ERRO CRÍTICO no Firebase: Falha ao salvar dados: {e}") 
         return False
 
-# --- ROTAS ADMINISTRATIVAS (Omitidas para brevidade, mas mantidas no seu fluxo) ---
+# --- ROTAS ADMINISTRATIVAS ---
 @app.route("/", methods=['GET'])
 def dashboard():
-    firebase_config_str = os.environ.get('__firebase_config', '{}')
-    try:
-        firebase_config_json = json.loads(firebase_config_str)
-    except json.JSONDecodeError:
-        firebase_config_json = {}
-    return render_template("dashboard.html", firebase_config=json.dumps(firebase_config_json))
-  
+    # Rota ajustada para dashboard.html
+    return render_template("dashboard.html")
+    
 # --- ROTA SIMPLES PARA HEALTH CHECK ---
 @app.route('/health', methods=['GET'])
 def health_check():
-    # Isso retorna imediatamente, garantindo que o Render saiba que o serviço está UP
     return "OK", 200
 
 @app.route('/upload-leads', methods=['POST'])
@@ -242,27 +241,17 @@ def gather():
     gather = Gather(num_digits=1, 
                     action=f'{base_url}/handle-gather?lead_data={lead_data_str}', 
                     method='POST', 
-                    timeout=45) # <--- MUDANÇA APLICADA AQUI
+                    timeout=45) 
     
     gather.play(audio_url)
     response.append(gather)
     
-    # Esta linha garante que, mesmo após o timeout, a requisição vá para /handle-gather
-    # (em vez de cair no "Sorry, Goodbye" do Twilio)
-    response.redirect(f'{base_url}/handle-gather?lead_data={lead_data_str}')
+    # O Redirect final foi removido pois a Twilio usa o 'action' do Gather
     
     return str(response)
     
-    # A Twilio segue o action em caso de digito ou timeout. 
-    # Um Redirect aqui é desnecessário e pode causar looping.
-    
-    response.say("Não recebemos sua opção. A ligação será encerrada.", voice="Vitoria", language="pt-BR")
-    response.append(Hangup())
-    
-    return str(response)
-
 # =======================================================
-# 🚨 ROTA DE EMERGÊNCIA: HANDLE-GATHER (GARANTIA DE LOG E 200 OK)
+# ROTA DE EMERGÊNCIA: HANDLE-GATHER (GARANTIA DE LOG E 200 OK)
 # =======================================================
 @app.route('/handle-gather', methods=['GET', 'POST'])
 def handle_gather():
@@ -313,67 +302,4 @@ def handle_gather():
             response.play(audio_url)
             
             if not salvamento_ok:
-                response.say("Ocorreu um erro ao registrar sua opção. Tente novamente mais tarde.", voice="Vitoria", language="pt-BR")
-                
-            response.append(Hangup())
-
-        # 4. PROCESSA O DÍGITO '2'
-        elif digit_pressed == '2':
-            lead_data = {
-                "telefone": lead_telefone,
-                "digito_pressionado": digit_pressed,
-                "nome": nome, "cpf": cpf, "matricula": matricula, "empregador": empregador,
-                "data_interesse": datetime.now().isoformat()
-            }
-            salvamento_ok = salvar_dados_firebase(lead_data)
-            
-            response.say("Você pressionou 2. Encerrando a chamada. Obrigado!", voice="Vitoria", language="pt-BR")
-            response.append(Hangup())
-
-        # 5. TIMEOUT/OPÇÃO INVÁLIDA
-        else:
-            logger.info(f"Cliente {lead_telefone} não digitou ou digitou opção inválida/timeout ({digit_pressed}).")
-            response.say("Opção inválida ou tempo esgotado. Encerrando.", voice="Vitoria", language="pt-BR")
-            response.append(Hangup())
-
-        return str(response)
-        
-    # ESTE BLOCO É O NOVO E CRÍTICO PARA DEBUGAR
-    except Exception as general_e:
-        logger.error(f"ERRO FATAL NA ROTA HANDLE-GATHER: {general_e}")
-        # Retorna um TwiML válido (200 OK) para evitar o "Sorry, Goodbye"
-        response.say("Desculpe, houve um erro interno do sistema. Encerrando.", voice="Vitoria", language="pt-BR")
-        response.append(Hangup())
-        return str(response)
-
-# --- ROTA PARA RECEBER STATUS DAS CHAMADAS ---
-@app.route('/status_callback', methods=['GET', 'POST'])
-def status_callback():
-    call_sid = request.values.get('CallSid', None)
-    call_status = request.values.get('CallStatus', None)
-    to_number = request.values.get('To', None)
-    
-    logger.info(f"Status da chamada {call_sid}: {call_status} para {to_number}")
-    
-    if db is not None:
-        try:
-            db.collection('historico_chamadas').add({
-                'call_sid': call_sid,
-                'status': call_status,
-                'telefone': to_number,
-                'data_chamada': datetime.now().isoformat()
-            })
-            logger.info(f"Status da chamada '{call_status}' salvo no Firebase para {to_number}.")
-        except Exception as e:
-            logger.error(f"Erro ao salvar o status da chamada no Firebase: {e}")
-            
-    return '', 200
-
-# Rota para servir arquivos estáticos
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('static', filename)
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+                response.say("
