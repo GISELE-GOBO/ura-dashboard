@@ -1,4 +1,4 @@
-# Usa a imagem base do Python (mais completa)
+# Usa a imagem base do Python (versão completa)
 FROM python:3.11
 
 # Instala ferramentas essenciais de compilação
@@ -7,11 +7,15 @@ RUN apt-get update && apt-get install -y build-essential
 # Define o diretório de trabalho
 WORKDIR /app
 
+# COPIA CRÍTICA: Garante que a chave JSON esteja no WORKDIR antes da instalação
+# O nome do arquivo JSON deve ser EXATAMENTE o mesmo que está na sua pasta.
+COPY ura-dashboard-firebase-adminsdk-fbsvc-f3a77.json .
+
 # Copia e instala as dependências
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o restante da sua aplicação
+# Copia o restante da sua aplicação (incluindo o app.py corrigido)
 COPY . .
 
 # Expõe a porta que o Cloud Run exige
