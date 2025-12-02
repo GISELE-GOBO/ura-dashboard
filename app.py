@@ -25,42 +25,47 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, static_url_path='/static', template_folder='templates')
 load_dotenv()
 
+# --- VARIÁVEIS DE ESTADO ---
+# Flag para verificar a prontidão do Firebase. Essencial para evitar o erro 500 na inicialização.
+FIREBASE_READY = False
+db = None
+FIREBASE_PATH = None
+base_url = None
+
 # --- CONFIGURAÇÕES GLOBAIS ---
 try:
     account_sid = os.environ["TWILIO_ACCOUNT_SID"]
     auth_token = os.environ["TWILIO_AUTH_TOKEN"]
     twilio_number = os.environ["TWILIO_PHONE_NUMBER"]
-    base_url = os.environ["BASE_URL"] # Melhor ler o BASE_URL da variável de ambiente
+    base_url = os.environ["BASE_URL"]
+    logger.info("Variáveis Twilio e BASE_URL carregadas com sucesso.")
 except KeyError as e:
-    logger.error(f"Erro: Variável de ambiente não encontrada: {e}")
-    sys.exit(1)
+    logger.critical(f"Erro CRÍTICO: Variável de ambiente Twilio não encontrada: {e}. O serviço pode falhar.")
+    # Não usamos sys.exit(1) para evitar que o worker do Gunicorn caia.
 
 # =======================================================
-# 🚨 CORREÇÃO CRÍTICA: SETUP DE CONEXÃO COM FIREBASE NO CLOUD RUN
+# SETUP DE CONEXÃO COM FIREBASE (ROBUSTO)
 # =======================================================
-db = None
-# A variável que passamos no deploy é FIREBASE_SERVICE_ACCOUNT_PATH
 firebase_key_filename = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH')
 
 if firebase_key_filename:
     try:
         # CONSTRÓI O CAMINHO ABSOLUTO: /app é o WORKDIR no Dockerfile
-        # Se o arquivo JSON for 'minha-chave.json', o caminho será '/app/minha-chave.json'
         FIREBASE_PATH = os.path.join('/app', firebase_key_filename)
         
-        # O código agora espera o caminho do arquivo, não o conteúdo JSON
+        # O código agora espera o caminho do arquivo
         cred = credentials.Certificate(FIREBASE_PATH)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
-        logger.info("Conexão com o Firebase estabelecida com sucesso usando o arquivo JSON.")
+        FIREBASE_READY = True # SUCESSO!
+        logger.info("Conexão com o Firebase estabelecida com sucesso.")
     except Exception as e:
-        logger.error(f"Erro ao inicializar o Firebase com o arquivo JSON: {e}")
+        logger.error(f"Erro ao inicializar o Firebase: {e}")
         logger.error(f"Caminho procurado: {FIREBASE_PATH}")
-        sys.exit(1) # Finaliza a execução se o Firebase não inicializar
+        FIREBASE_READY = False # FALHA!
 else:
     logger.error("Erro: Variável FIREBASE_SERVICE_ACCOUNT_PATH não definida ou vazia.")
-    sys.exit(1) # Finaliza a execução se a variável estiver ausente
-# =======================================================
+    FIREBASE_READY = False
 
 # Arquivos de áudio
 AUDIO_INICIAL_FILENAME = 'audio_portabilidadeexclusiva.mp3'
@@ -86,9 +91,9 @@ def clean_and_format_phone(phone_str):
 # 🛠️ SALVAMENTO NO FIREBASE ROBUSTO
 # =======================================================
 def salvar_dados_firebase(dados):
-    global db
-    if db is None:
-        logger.error("Erro: A conexão com o Firebase não está ativa.")
+    global db, FIREBASE_READY
+    if not FIREBASE_READY or db is None:
+        logger.error("Erro: A conexão com o Firebase não está ativa. Salvamento cancelado.")
         return False
     try:
         leads_collection_ref = db.collection('leads_interessados')
@@ -111,17 +116,25 @@ def salvar_dados_firebase(dados):
 
 # --- ROTAS ADMINISTRATIVAS ---
 @app.route("/", methods=['GET'])
+@app.route("/dashboard.html", methods=['GET']) # Rota adicionada para o acesso direto
 def dashboard():
-    # Rota ajustada para dashboard.html
+    if not FIREBASE_READY:
+        return "Erro de Serviço: Conexão com o Firebase falhou na inicialização. Verifique os logs do Cloud Run para o erro no caminho da chave JSON.", 500
+        
     return render_template("dashboard.html")
     
 # --- ROTA SIMPLES PARA HEALTH CHECK ---
 @app.route('/health', methods=['GET'])
 def health_check():
-    return "OK", 200
+    # Retorna 200 OK e informa se o Firebase está pronto
+    status = "OK" if FIREBASE_READY else "WARNING (Firebase not ready)"
+    return f"Status: {status}", 200
 
 @app.route('/upload-leads', methods=['POST'])
 def upload_leads():
+    if not FIREBASE_READY:
+        return jsonify({"message": "Erro de conexão: Firebase não inicializado."}), 500
+        
     if 'csv_file' not in request.files:
         return jsonify({"message": "Nenhum arquivo enviado"}), 400
     
@@ -147,6 +160,9 @@ def upload_leads():
 
 @app.route('/iniciar-chamadas', methods=['POST'])
 def iniciar_chamadas():
+    if not FIREBASE_READY:
+        return jsonify({"message": "Erro de conexão: Firebase não inicializado."}), 500
+        
     global discagem_ativa
 
     if discagem_ativa:
@@ -246,8 +262,6 @@ def gather():
     gather.play(audio_url)
     response.append(gather)
     
-    # O Redirect final foi removido pois a Twilio usa o 'action' do Gather
-    
     return str(response)
     
 # =======================================================
@@ -307,7 +321,8 @@ def handle_gather():
                 
             response.append(Hangup())
 
-           # 4. PROCESSA O DÍGITO '2'
+
+        # 4. PROCESSA O DÍGITO '2'
         elif digit_pressed == '2':
             # Adicione a lógica do que deve acontecer quando '2' é pressionado
             # Por exemplo, uma mensagem temporária para evitar o erro de Indentação:
@@ -315,5 +330,31 @@ def handle_gather():
             response.append(Hangup()) # Encerra a chamada após a mensagem
             
         # 5. LÓGICA PARA DÍGITOS INVÁLIDOS
+        elif digit_pressed:
+            response.say("Opção inválida. Por favor, digite 1 ou 2.", voice="Vitoria", language="pt-BR")
+            response.append(Hangup())
+            
+        # 6. NENHUM DÍGITO PRESSIONADO (TIMEOUT)
         else:
-            # ... o restante do seu código para dígitos inválidos
+            response.say("Não detectamos nenhuma opção. A ligação será encerrada.", voice="Vitoria", language="pt-BR")
+            response.append(Hangup())
+            
+    except Exception as general_error:
+        logger.error(f"ERRO FATAL em handle_gather: {general_error}", exc_info=True)
+        response.say("Desculpe, ocorreu um erro grave no servidor. Tente novamente mais tarde.", voice="Vitoria", language="pt-BR")
+        response.append(Hangup())
+
+    return str(response)
+
+# --- ROTA DE STATUS CALLBACK (para logar o resultado da chamada) ---
+@app.route('/status_callback', methods=['POST'])
+def status_callback():
+    call_status = request.values.get('CallStatus', '')
+    call_sid = request.values.get('CallSid', '')
+    to_number = request.values.get('To', '')
+    
+    logger.info(f"CALLBACK: Call SID: {call_sid}, Status: {call_status}, Para: {to_number}")
+    
+    # Aqui você poderia salvar o status da chamada no Firebase se necessário
+    
+    return ('', 204) # Retorna resposta vazia 204 No Content
