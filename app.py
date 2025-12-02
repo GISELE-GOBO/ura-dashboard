@@ -307,6 +307,13 @@ def handle_gather():
                 
             response.append(Hangup())
 
-        # 4. PROCESSA O DÍGITO '2'
+           # 4. PROCESSA O DÍGITO '2'
         elif digit_pressed == '2':
-# ... e o restante do seu código
+            # Adicione a lógica do que deve acontecer quando '2' é pressionado
+            # Por exemplo, uma mensagem temporária para evitar o erro de Indentação:
+            response.say("Você selecionou a opção 2. Aguarde para ser transferido.", voice="Vitoria", language="pt-BR")
+            response.append(Hangup()) # Encerra a chamada após a mensagem
+            
+        # 5. LÓGICA PARA DÍGITOS INVÁLIDOS
+        else:
+            # ... o restante do seu código para dígitos inválidos
