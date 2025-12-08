@@ -10,40 +10,970 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, where, addDoc, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Ativar logging de debug para o Firestore
+        setLogLevel('Debug');
+
+        // Variáveis globais (disponibilizadas pelo Canvas/Ambiente)
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
         window.app = null;
         window.db = null;
         window.auth = null;
         window.userId = null;
         window.isFirebaseReady = false;
+        let myChart = null;
+        let UraUnsubscribe = () => {};
+        let ClientUnsubscribe = () => {};
+        let uraInterval;
+        let isUraRunning = false;
 
-      
+        // Funções utilitárias
+        const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+        const formatPercent = (value) => (value * 100).toFixed(2) + '%';
+        // Função corrigida para limpar R$, pontos e usar vírgula como decimal
+        const cleanCurrency = (text) => {
+            if (typeof text !== 'string') return parseFloat(text) || 0;
+            return parseFloat(text.replace(/[R$\.]/g, '').replace(',', '.')) || 0;
+        };
+        
+
+        const showStatus = (message, isError = false) => {
+            const statusMessageEl = document.getElementById('statusMessage');
+            if (statusMessageEl) {
+                statusMessageEl.textContent = message;
+                statusMessageEl.classList.toggle('text-red-600', isError);
+                statusMessageEl.classList.toggle('bg-red-100', isError);
+                statusMessageEl.classList.toggle('text-gray-600', !isError);
+                statusMessageEl.classList.toggle('bg-gray-50', !isError);
+            }
+        };
+
+        const showMessage = (message, isError) => {
+            const messageBox = document.createElement('div');
+            messageBox.className = `fixed top-4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl shadow-md z-50 transition-all duration-300 transform animate-pulse`;
+            messageBox.textContent = message;
+            if (isError) {
+                messageBox.classList.add('bg-red-500', 'text-white');
+            } else {
+                messageBox.classList.add('bg-green-500', 'text-white');
+            }
+            document.body.appendChild(messageBox);
+            setTimeout(() => {
+                messageBox.classList.add('opacity-0');
+                setTimeout(() => messageBox.remove(), 300);
+            }, 3000);
+        };
+        
+        // --- CHART LOGIC ---
+        function updateChart(answered, unanswered, converted = 0) {
+            const ctx = document.getElementById('myChart');
+            if (!ctx) return;
+
+            const data = {
+                labels: ['Atendidas', 'Não Atendidas', 'Convertidas'],
+                datasets: [{
+                    label: 'Status da Campanha',
+                    data: [answered, unanswered, converted],
+                    backgroundColor: ['#10b981', '#f43f5e', '#3b82f6'], 
+                    hoverOffset: 4
+                }]
+            };
+
+            if (myChart) {
+                myChart.data = data;
+                myChart.update();
+            } else {
+                myChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: data,
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { position: 'bottom' },
+                            title: { display: false }
+                        }
+                    }
+                });
+            }
+        }
+
+        // --- FIREBASE INITIALIZATION AND AUTHENTICATION ---
+        const initializeFirebase = async () => {
+            showStatus("A iniciar a conexão com a base de dados...", false);
+            
+            if (Object.keys(firebaseConfig).length === 0) {
+                 return; 
+            }
+
+            try {
+                window.app = initializeApp(firebaseConfig);
+                window.auth = getAuth(window.app);
+                window.db = getFirestore(window.app);
+
+                onAuthStateChanged(window.auth, async (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        document.getElementById('userIdDisplay').textContent = `ID do Usuário: ${window.userId}`;
+                        window.isFirebaseReady = true;
+                        
+                        setupDashboardListeners();
+                        setupClientListeners();
+                        showStatus("Plataforma pronta. Dashboard em tempo real iniciado.");
+                        
+                        const saveClientBtn = document.getElementById('saveClientBtn');
+                        if(saveClientBtn) {
+                            saveClientBtn.disabled = false;
+                            saveClientBtn.textContent = 'Salvar Cliente';
+                            saveClientBtn.classList.replace('bg-gray-400', 'bg-emerald-600');
+                            saveClientBtn.classList.replace('cursor-not-allowed', 'hover:bg-emerald-700');
+                        }
+                    } else {
+                        if (initialAuthToken) {
+                            signInWithCustomToken(window.auth, initialAuthToken).catch(error => {
+                                console.error("Erro ao autenticar com token customizado. Tentando anônimo...", error);
+                                signInAnonymously(window.auth).catch(err => showStatus("Erro ao autenticar.", true));
+                            });
+                        } else {
+                            signInAnonymously(window.auth).catch(error => showStatus("Erro ao autenticar.", true));
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Erro fatal ao inicializar o Firebase:", error);
+                showStatus("Erro fatal: Não foi possível conectar à base de dados. Verifique a consola.", true);
+            }
+        };
+
+        // --- DASHBOARD AND URA LOGIC (Firestore Read/Write) ---
+        
+        // Função para atualizar o botão Iniciar/Em Execução
+        const updateUraButton = () => {
+            const iniciarBtn = document.getElementById('iniciarBtn');
+            if (!iniciarBtn) return;
+            
+            if (isUraRunning) {
+                iniciarBtn.classList.add('animate-pulse', 'bg-emerald-600');
+                iniciarBtn.classList.remove('bg-emerald-500');
+                iniciarBtn.textContent = 'Em Execução';
+            } else {
+                iniciarBtn.classList.remove('animate-pulse', 'bg-emerald-600');
+                iniciarBtn.classList.add('bg-emerald-500');
+                iniciarBtn.textContent = 'Iniciar';
+            }
+        }
+
+
+        const startUraSimulation = () => {
+            if (isUraRunning) return;
+            if (!window.isFirebaseReady) {
+                showStatus("Firebase não está pronto. Por favor, aguarde a conexão.", true);
+                return;
+            }
+
+            isUraRunning = true;
+            updateUraButton(); // Atualiza o botão para "Em Execução"
+            showStatus('Campanha URA Iniciada. Simulação em andamento...');
+            
+            const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
+            
+            uraInterval = setInterval(async () => {
+                try {
+                    // Busca apenas leads com status 'call_pending'
+                    const q = query(leadsCollectionRef, where("status", "==", "call_pending"));
+                    const querySnapshot = await getDocs(q);
+
+                    if (querySnapshot.empty) {
+                        showStatus('Simulação concluída: Sem leads pendentes para ligar.', false);
+                        stopUraSimulation();
+                        return;
+                    }
+
+                    // Seleciona um lead aleatório entre os pendentes
+                    const leadDoc = querySnapshot.docs[Math.floor(Math.random() * querySnapshot.docs.length)];
+                    // 70% de chance de ser atendido, 30% não
+                    const newStatus = Math.random() < 0.7 ? 'answered' : 'unanswered'; 
+
+                    // Atualiza o status do lead no Firestore
+                    await setDoc(doc(window.db, `artifacts/${appId}/public/data/ura_leads`, leadDoc.id), {
+                        status: newStatus,
+                        lastCallTime: new Date().toISOString(),
+                        // Mantém outros dados do lead
+                        ...leadDoc.data() 
+                    }, { merge: true });
+
+                    showStatus(`Ligando para ${leadDoc.data().name}. Status: ${newStatus === 'answered' ? 'Atendido!' : 'Não Atendido.'}`);
+
+                } catch (error) {
+                    console.error("Erro na simulação URA:", error);
+                    stopUraSimulation();
+                }
+            }, 3000); 
+        };
+
+        const stopUraSimulation = () => {
+            if (!isUraRunning) return;
+            isUraRunning = false;
+            clearInterval(uraInterval);
+            updateUraButton(); // Atualiza o botão para "Iniciar"
+            showStatus('Campanha URA Parada. Clique em Iniciar para continuar.');
+        };
+        
+        function setupDashboardListeners() {
+            if (!window.isFirebaseReady || !window.userId) return;
+
+            // Adiciona listeners para os botões de controle da URA
+            document.getElementById('iniciarBtn').addEventListener('click', startUraSimulation);
+            document.getElementById('pararBtn').addEventListener('click', stopUraSimulation);
+            
+            // 1. Leads Upload (Simulated)
+            const uploadForm = document.getElementById('uploadForm');
+            const csvFileEl = document.getElementById('csv_file'); // Obtém o elemento de input de arquivo
+
+            // Adiciona listener para atualizar o texto do botão/label com o nome do arquivo selecionado
+            if (csvFileEl) {
+                csvFileEl.addEventListener('change', function() {
+                    const fileLabelTextEl = document.getElementById('fileLabelText');
+                    const fileName = this.files.length > 0 ? this.files[0].name : 'Escolher Arquivo CSV/XLS';
+                    if (fileLabelTextEl) {
+                         fileLabelTextEl.textContent = fileName;
+                    }
+                });
+            }
+
+
+            if (uploadForm) {
+                uploadForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    
+                    const uploadStatusEl = document.getElementById('uploadStatus');
+                    uploadStatusEl.classList.remove('hidden');
+                    uploadStatusEl.textContent = 'A processar e carregar leads...';
+
+                    // Determina se um arquivo foi selecionado pelo usuário
+                    const fileSelected = csvFileEl && csvFileEl.files.length > 0;
+                    const selectedFileName = fileSelected ? csvFileEl.files[0].name : 'Leads de teste internos';
+
+                    // NOTA: Se fileSelected for true, a lógica para ler, parsear e usar
+                    // o conteúdo real do arquivo CSV/XLS seria implementada aqui.
+                    
+                    try {
+                        // Leads de teste (simulando upload)
+                        const mockLeads = [
+                            { name: "José Alves", phone: "11988887777", bank: "itau", status: "call_pending" },
+                            { name: "Maria Clara", phone: "21977776666", bank: "bradesco", status: "call_pending" },
+                            { name: "Carlos Brito", phone: "31966665555", bank: "caixa", status: "call_pending" },
+                            { name: "Ana Souza", phone: "41955554444", bank: "santander", status: "answered" },
+                        ];
+
+                        const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
+                        
+                        // Marca leads existentes como 'deleted'
+                        const currentLeadsSnapshot = await getDocs(leadsCollectionRef);
+                        const updatePromises = currentLeadsSnapshot.docs.map(doc => setDoc(doc.ref, { status: "deleted" }, { merge: true })); 
+                        await Promise.all(updatePromises);
+
+                        // Adiciona novos leads
+                        for (const lead of mockLeads) {
+                            await addDoc(leadsCollectionRef, {
+                                ...lead,
+                                uploaderId: window.userId,
+                                timestamp: new Date().toISOString(),
+                                status: lead.status 
+                            });
+                        }
+                        
+                        // Atualiza a mensagem de status com base na seleção do arquivo
+                        if (fileSelected) {
+                            uploadStatusEl.textContent = `O arquivo ${selectedFileName} foi selecionado! No entanto, a simulação iniciou com 4 Leads de Teste. A lógica de leitura de arquivos é o próximo passo.`;
+                        } else {
+                            uploadStatusEl.textContent = `${mockLeads.length} Leads de teste carregados com sucesso!`;
+                        }
+                        
+                        // Inicia a simulação se não estiver rodando (para os 'call_pending')
+                        if (!isUraRunning) startUraSimulation(); 
+                        
+                    } catch (error) {
+                        console.error("Erro ao carregar leads:", error);
+                        uploadStatusEl.textContent = 'Erro ao carregar leads. Verifique o console.';
+                    }
+                });
+            }
+
+            // 2. Real-time Dashboard Listener
+            const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
+            UraUnsubscribe = onSnapshot(leadsCollectionRef, (snapshot) => {
+                let totalCalls = 0;
+                let answeredCalls = 0;
+                let unansweredCalls = 0;
+                let convertedCalls = 0;
+                
+                snapshot.forEach(doc => {
+                    const lead = doc.data();
+                    if (lead.status !== 'deleted') { // Ignora leads marcados para exclusão
+                        totalCalls++;
+                        if (lead.status === 'answered') {
+                            answeredCalls++;
+                        } else if (lead.status === 'unanswered') {
+                            unansweredCalls++;
+                        } else if (lead.status === 'converted') {
+                            convertedCalls++;
+                        }
+                    }
+                });
+
+                document.getElementById('totalCallsMetric').textContent = totalCalls;
+                document.getElementById('answeredCallsMetric').textContent = answeredCalls;
+                document.getElementById('unansweredCallsMetric').textContent = unansweredCalls;
+                
+                updateChart(answeredCalls, unansweredCalls, convertedCalls);
+                
+                // Verifica se todos os leads pendentes foram processados para parar a simulação
+                const pendingLeads = snapshot.docs.filter(doc => doc.data().status === 'call_pending').length;
+                if (isUraRunning && pendingLeads === 0) {
+                     stopUraSimulation();
+                     showStatus('Simulação concluída: Todos os leads foram processados.', false);
+                }
+                
+            }, (error) => {
+                console.error("Erro ao carregar dados do Dashboard:", error);
+                showStatus("Erro de conexão com o Dashboard em tempo real.", true);
+            });
+        }
+
+        // --- SDR IA LOGIC (Gemini API) ---
+        document.getElementById('sdrForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            generateSDRScript();
+        });
+
+        async function generateSDRScript() {
+            const leadName = document.getElementById('leadName').value;
+            const productType = document.getElementById('productType').value;
+            const leadStatus = document.getElementById('leadStatus').value;
+            const resultEl = document.getElementById('sdrResult');
+
+            if (!leadName || !productType || !leadStatus) {
+                resultEl.innerHTML = '<span class="text-red-500">Por favor, preencha todos os campos do lead.</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-500 font-bold animate-pulse">Gerando roteiro SDR otimizado...</span>';
+            
+            const productMap = {
+                consignado: "Crédito Consignado (BAIXA TAXA)",
+                financiamento_imovel: "Financiamento Imobiliário",
+                financiamento_veiculo: "Financiamento de Veículo",
+                credito_pessoal: "Crédito Pessoal (Taxa de 1.85%)"
+            };
+            
+            const statusMap = {
+                quente: "O cliente está QUENTE e demonstrou interesse recente.",
+                morno: "O cliente está MORNO e interagiu, mas precisa de incentivo.",
+                frio: "O cliente está FRIO e este é o primeiro contato."
+            };
+            
+            const systemPrompt = "Você é um SDR de alta performance para o correspondente bancário GoboCred. Seu objetivo é agendar a próxima etapa da venda (reunião/envio de documentos). Seja cordial, direto, focado na solução de valor e use um tom de voz brasileiro formal, mas acolhedor. O roteiro deve ser conciso e focado em um único produto. Use markdown para formatar os passos.";
+            
+            const userQuery = `Gere um roteiro de prospecção fria/quente para o lead chamado ${leadName}. O produto a ser oferecido é ${productMap[productType]}. A situação do lead é: ${statusMap[leadStatus]}. Crie o roteiro com 4 passos: 1. Abertura (conexão e propósito), 2. Proposta de Valor (o benefício do produto), 3. Qualificação (pergunta chave) e 4. Próxima Etapa (call to action).`;
+            
+            const apiKey = ""
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const payload = {
+                        contents: [{ parts: [{ text: userQuery }] }],
+                        systemInstruction: { parts: [{ text: systemPrompt }] },
+                    };
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                    const result = await response.json();
+                    const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                    if (text) {
+                        resultEl.innerHTML = `<div class="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500 text-left whitespace-pre-wrap">${text}</div>`;
+                        return; 
+                    } else {
+                        throw new Error("Resposta do modelo vazia.");
+                    }
+                } catch (error) {
+                    console.error(`Tentativa ${attempt + 1} falhou:`, error);
+                    if (attempt === 2) {
+                        resultEl.innerHTML = '<span class="text-red-500">Erro ao gerar o roteiro SDR após várias tentativas.</span>';
+                        return;
+                    }
+                    const delay = Math.pow(2, attempt) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // --- SIMULADOR DE ROTAS URA ---
+        const bankRoutes = {
+            itau: "URA Itaú: 4004-4828 -> 9 (Outros Assuntos) -> 2 (Cartões) -> 1 (Atendente).",
+            santander: "URA Santander: 4004-3535 -> Digitar CPF -> 9 (Falar c/ Atendente) -> 3 (Contratos/Serviços).",
+            caixa: "URA Caixa: 0800-726-0505 -> 5 (Crédito Consignado) -> 2 (Informações) -> 9 (Falar c/ Atendente).",
+            bradesco: "URA Bradesco: 4004-8000 -> 1 (Pessoa Física) -> 9 (Falar c/ Atendente) -> 1 (Empréstimos).",
+            bancodobrasil: "URA BB: 4004-0001 -> Digitar Agência/Conta -> 9 (Falar c/ Atendente).",
+            c6bank: "URA C6: 3003-6118 -> 8 (Outros Assuntos) -> 1 (Falar com o C6).",
+            qualibank: "URA QualiBank: 0800-999-5555 -> 3 (Consignado) -> 0 (Atendente).",
+            bancohappy: "URA Banco Happy: 0800-123-4567 -> 4 (Revisão de Contratos) -> 0 (Falar).",
+            brb: "URA BRB: 3322-1515 -> Digitar CPF -> 9 (Outros) -> 1 (Atendente).",
+            picpay: "URA PicPay: 0800-774-7744 -> 3 (Empréstimo) -> 0 (Atendente).",
+            banrisul: "URA Banrisul: 0800-646-1515 -> 5 (Crédito) -> 1 (Consignado) -> 0 (Atendente).",
+            digio: "URA Digio: 3004-9920 -> 5 (Opções de Crédito) -> 0 (Atendente)."
+        };
+
+        document.getElementById('simulateBtn').addEventListener('click', () => {
+            const bankSelect = document.getElementById('bankSelect');
+            const bank = bankSelect.value;
+            const logEl = document.getElementById('simulatorLog');
+
+            if (!bank) {
+                logEl.innerHTML = '<span class="text-red-500 font-bold">Por favor, selecione um banco para iniciar a simulação.</span>';
+                return;
+            }
+
+            logEl.innerHTML = `
+                <p class="text-blue-600 font-bold mb-2">Simulação Iniciada: ${bankSelect.options[bankSelect.selectedIndex].text}</p>
+                <div class="space-y-2">
+                    <p><strong>[URA]:</strong> Bem-vindo ao Atendimento Digital. Por favor, digite a opção desejada.</p>
+                    <p class="text-purple-600"><strong>[Usuário]:</strong> *Seguindo roteiro*</p>
+                    <p><strong>[URA]:</strong> O roteiro mais eficiente para o ${bankSelect.options[bankSelect.selectedIndex].text} é: </p>
+                    <p class="bg-yellow-100 p-2 rounded-lg font-mono text-sm">${bankRoutes[bank] || "Roteiro não encontrado. Tente outra opção."}</p>
+                    <p class="text-emerald-600 font-bold">Simulação de Sucesso: Rota encontrada. O SDR agora sabe o caminho mais curto para o atendimento humano.</p>
+                </div>
+            `;
+        });
+
+        // --- CLIENT ANALYSIS LOGIC (Firestore Read/Write Private) ---
+
+        function setupClientListeners() {
+            if (!window.isFirebaseReady || !window.userId) return;
+
+            const clientCollectionPath = `artifacts/${appId}/users/${window.userId}/clients`;
+            const clientCollectionRef = collection(window.db, clientCollectionPath);
+
+            // 1. Client Form Submission (Save)
+            const clientForm = document.getElementById('clientForm');
+            if(clientForm) {
+                clientForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    
+                    const contractDateValue = document.getElementById('contractDate').value;
+                    const contractDateObj = new Date(contractDateValue);
+                    
+                    const recontactDate = new Date(contractDateObj);
+                    recontactDate.setMonth(recontactDate.getMonth() + 1); // 1 mês após o contrato
+
+                    const data = {
+                        name: document.getElementById('clientName').value,
+                        cpf: document.getElementById('clientCpf').value.replace(/\D/g, ''), 
+                        benefitNumber: document.getElementById('clientBenefitNumber').value,
+                        address: document.getElementById('clientAddress').value,
+                        phone: document.getElementById('clientPhone').value,
+                        contractDate: contractDateValue,
+                        createdAt: new Date().toISOString(), // Salva como string ISO
+                        recontactDue: recontactDate.toISOString() // Salva como string ISO
+                    };
+
+                    try {
+                        await addDoc(clientCollectionRef, data);
+                        showMessage("Cliente salvo com sucesso!", false);
+                        e.target.reset();
+                    } catch (error) {
+                        console.error("Erro ao salvar cliente:", error);
+                        showMessage("Erro ao salvar cliente. Verifique o console.", true);
+                    }
+                });
+            }
+
+            // 2. Client Search (Get by CPF)
+            const searchForm = document.getElementById('searchForm');
+            if(searchForm) {
+                searchForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const searchCpf = document.getElementById('searchCpf').value.replace(/\D/g, '');
+                    const clientDetailsEl = document.getElementById('clientDetails');
+
+                    if (!searchCpf) {
+                        clientDetailsEl.innerHTML = '<span class="text-red-500">Por favor, digite um CPF para buscar.</span>';
+                        return;
+                    }
+
+                    clientDetailsEl.innerHTML = '<span class="text-blue-500 font-bold animate-pulse">Buscando cliente...</span>';
+
+                    try {
+                        const q = query(clientCollectionRef, where("cpf", "==", searchCpf));
+                        const querySnapshot = await getDocs(q);
+
+                        if (querySnapshot.empty) {
+                            clientDetailsEl.innerHTML = `<span class="text-orange-500">Nenhum cliente encontrado com o CPF: ${searchCpf}.</span>`;
+                            return;
+                        }
+
+                        const clientData = querySnapshot.docs[0].data();
+                        
+                        // As datas são salvas como string ISO no Firestore
+                        const recontactDate = new Date(clientData.recontactDue);
+                        
+                        clientDetailsEl.innerHTML = `
+                            <h4 class="font-extrabold text-lg text-emerald-700">${clientData.name}</h4>
+                            <p><strong>CPF:</strong> ${clientData.cpf}</p>
+                            <p><strong>Benefício:</strong> ${clientData.benefitNumber || 'N/A'}</p>
+                            <p><strong>Telefone:</strong> ${clientData.phone}</p>
+                            <p><strong>Endereço:</strong> ${clientData.address}</p>
+                            <p class="mt-4 p-2 bg-yellow-100 rounded-lg">
+                                <strong>Contrato Finalizado em:</strong> ${new Date(clientData.contractDate).toLocaleDateString('pt-BR')}
+                            </p>
+                            <p class="font-bold text-green-700 mt-2">
+                                Sugestão de Recontacto: ${recontactDate.toLocaleDateString('pt-BR')}
+                            </p>
+                        `;
+
+                    } catch (error) {
+                        console.error("Erro ao buscar cliente:", error);
+                        clientDetailsEl.innerHTML = '<span class="text-red-500">Erro ao buscar cliente.</span>';
+                    }
+                });
+            }
+
+            // 3. Client List Listener (Real-time update)
+            ClientUnsubscribe = onSnapshot(clientCollectionRef, (snapshot) => {
+                const clientListEl = document.getElementById('clientList');
+                if (!clientListEl) return;
+                clientListEl.innerHTML = '';
+                
+                if (snapshot.empty) {
+                    clientListEl.innerHTML = '<li class="text-gray-500 italic">Nenhum cliente salvo ainda.</li>';
+                    return;
+                }
+
+                snapshot.forEach(doc => {
+                    const client = doc.data();
+                    const li = document.createElement('li');
+                    li.className = 'flex justify-between items-center p-3 bg-white rounded-lg shadow-sm border border-emerald-100 hover:shadow-md transition';
+                    li.innerHTML = `
+                        <span class="font-medium text-gray-800">${client.name}</span>
+                        <span class="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                            ${new Date(client.contractDate).toLocaleDateString('pt-BR')}
+                        </span>
+                    `;
+                    clientListEl.appendChild(li);
+                });
+            }, (error) => {
+                console.error("Erro ao carregar lista de clientes:", error);
+                document.getElementById('clientList').innerHTML = '<li class="text-red-500 italic">Erro ao carregar dados.</li>';
+            });
+        }
+
+
+        // --- LEAD SIMULATOR CORE LOGIC (Processar Lead) ---
+
+        function calculateLeadPotential(installmentsPaid, totalInstallments, installmentValue, originalTax, newCoeficiente) {
+            
+            const remainingTerms = totalInstallments - installmentsPaid;
+            
+            // Simplificação de SD: 80% do valor restante da parcela * prazo restante
+            const sdFactor = (remainingTerms / totalInstallments) * 0.8;
+            const approxSD = sdFactor * installmentValue * totalInstallments;
+            
+            // Valor máximo de empréstimo (PV) com o novo coeficiente * prazo restante
+            const newMaxLoan = installmentValue / newCoeficiente * remainingTerms; 
+            
+            // Valor Liberado (Novo Max - SD Estimado)
+            const valorLiberado = newMaxLoan - approxSD;
+
+            return {
+                remainingTerms,
+                approxSD: approxSD > 0 ? approxSD : 0, 
+                newMaxLoan,
+                valorLiberado: valorLiberado > 0 ? valorLiberado : 0, 
+                savingsRate: originalTax - (newCoeficiente * 100)
+            };
+        }
+
+        function parseLeadData(text) {
+            const data = {};
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            lines.forEach(line => {
+                const [key, value] = line.split(':').map(s => s.trim());
+                if (key && value) {
+                    data[key.toLowerCase().replace(/ /g, '_')] = value;
+                }
+            });
+
+            const extractMatch = (regex) => {
+                const match = text.match(regex);
+                return match && match[1] ? match[1].trim() : 'Não informado';
+            };
+            
+            const nome = extractMatch(/Nome:\s*(.*)/i);
+            const cpf = extractMatch(/CPF:\s*(.*)/i);
+            const foneCliente = extractMatch(/Fone Cliente:\s*(.*)/i);
+            const beneficio = extractMatch(/Beneficio:\s*(.*)/i);
+            const especie = extractMatch(/Espécie:\s*(.*)/i);
+            const dataNascimentoStr = extractMatch(/Data Nascimento:\s*([\d\/]+)/i);
+
+            let idade = 'Não informada';
+            if (dataNascimentoStr && dataNascimentoStr !== 'Não informado') {
+                const partesData = dataNascimentoStr.split('/');
+                const dataNascimento = new Date(partesData[2], partesData[1] - 1, partesData[0]);
+                const hoje = new Date();
+                let idadeCalculada = hoje.getFullYear() - dataNascimento.getFullYear();
+                const m = hoje.getMonth() - dataNascimento.getMonth();
+                if (m < 0 || (m === 0 && hoje.getDate() < dataNascimento.getDate())) {
+                    idadeCalculada--;
+                }
+                idade = idadeCalculada;
+            }
+
+            return {
+                nome,
+                cpf,
+                fone_cliente: foneCliente,
+                beneficio,
+                especie,
+                idade,
+                salario: cleanCurrency(data.salario || '0'),
+                margem_emprestimo: cleanCurrency(data.margem_emprestimo || '0'),
+                margem_cartao: cleanCurrency(data.margem_cartao || '0'),
+            };
+        }
+
+        function parseContracts(text) {
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            return lines.map(line => {
+                const parts = line.split(/\s+/).filter(p => p.trim() !== '');
+                
+                // Formato esperado: ID Banco Data_Inicio Valor_Total Parcela Prazo_Total Parcelas_Pagas Valor_Restante Taxa_Original (9 campos)
+                if (parts.length >= 9) {
+                    return {
+                        contractId: parts[0],
+                        bank: parts[1], 
+                        startDate: parts[2],
+                        totalValue: cleanCurrency(parts[3]),
+                        installment: cleanCurrency(parts[4]),
+                        totalTerms: parseInt(parts[5]),
+                        installmentsPaid: parseInt(parts[6]),
+                        remainingValue: cleanCurrency(parts[7]),
+                        originalTax: cleanCurrency(parts[8]) // Taxa em % (Ex: 1.75)
+                    };
+                }
+                return null;
+            }).filter(c => c !== null);
+        }
+
+        window.processarLead = function() {
+            const textoLead = document.getElementById('textoLead').value;
+            const textoContratos = document.getElementById('textoContratos').value;
+            const novoCoeficiente = parseFloat(document.getElementById('novoCoeficiente').value);
+            const novaTaxa = parseFloat(document.getElementById('novaTaxa').value);
+            const resultadosEl = document.getElementById('resultados');
+
+            if (!textoLead || !textoContratos || isNaN(novoCoeficiente) || novoCoeficiente <= 0) {
+                resultadosEl.innerHTML = '<p class="text-red-600 font-bold">Por favor, preencha o texto do Lead, a Tabela de Contratos e o Novo Coeficiente (maior que zero).</p>';
+                resultadosEl.classList.remove('hidden');
+                return;
+            }
+            
+            resultadosEl.innerHTML = `
+                <div class="flex justify-center items-center py-8">
+                    <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-4 text-gray-500">A processar dados e calcular potencial...</span>
+                </div>
+            `;
+            resultadosEl.classList.remove('hidden');
+
+            setTimeout(() => { // Simula o tempo de processamento
+                
+                const leadData = parseLeadData(textoLead);
+                const contracts = parseContracts(textoContratos);
+                
+                // Coeficientes de referência (para análise interna, já que usamos o novoCoeficiente para simular o potencial)
+                const coeficienteRefin = 0.02300; 
+                
+                let parcelaTotal = 0;
+                let saldoTotal = 0;
+                let totalVlEmprestado = 0;
+                let contratosDetalhes = [];
+
+
+                // Processamento de Contratos
+                contracts.forEach(contract => {
+                    const vlParcela = contract.installment;
+                    const saldo = contract.remainingValue;
+                    
+                    // Cálculo do potencial usando a função de cálculo
+                    const potential = calculateLeadPotential(
+                        contract.installmentsPaid, contract.totalTerms, vlParcela, contract.originalTax, novoCoeficiente
+                    );
+
+                    parcelaTotal += vlParcela;
+                    saldoTotal += saldo;
+                    totalVlEmprestado += contract.totalValue;
+
+                    contratosDetalhes.push({
+                        ...contract,
+                        valorLiberado: potential.valorLiberado,
+                        approxSD: potential.approxSD,
+                        vlEmprestado: contract.totalValue,
+                        parcela: vlParcela,
+                        saldo: saldo,
+                    });
+                });
+                
+                // --- Simulações Adicionais ---
+                
+                let simulacaoMargem = null;
+                if (leadData.margem_emprestimo > 0) {
+                    // Valor liberado com 84x (prazo comum)
+                    const valorLiberado = leadData.margem_emprestimo / novoCoeficiente * 84;
+                    simulacaoMargem = { parcela: leadData.margem_emprestimo, valorLiberado: valorLiberado };
+                }
+
+                let simulacaoRC = null;
+                if (parcelaTotal > 0 && !isNaN(novoCoeficiente) && novoCoeficiente > 0) {
+                    // Valor Máximo de Empréstimo usando a Parcela Total e o Novo Coeficiente
+                    const maxLoan = (parcelaTotal / novoCoeficiente) * 84; 
+                    const valorLiberado = maxLoan - saldoTotal;
+                    simulacaoRC = {
+                        parcela: parcelaTotal,
+                        coeficiente: novoCoeficiente,
+                        taxa: novaTaxa,
+                        valorLiberado: valorLiberado
+                    };
+                }
+
+                // --- Pontuação e Ações ---
+
+                let pontuacao = 0;
+                let acoes = [];
+                let totalPotential = 0;
+                
+                if (leadData.salario > 2500) { pontuacao += 20; }
+                if (leadData.nome !== 'Não informado') { pontuacao += 30; }
+                if (typeof leadData.idade === 'number' && leadData.idade >= 18 && leadData.idade < 60) { pontuacao += 10; }
+
+                if (leadData.margem_emprestimo > 0) {
+                    acoes.push(`O lead tem margem livre disponível de ${formatCurrency(leadData.margem_emprestimo)} para um novo contrato.`);
+                    pontuacao += 25;
+                } else {
+                    acoes.push("O lead não tem margem de empréstimo disponível. Foco em refinanciamento e portabilidade.");
+                }
+                
+                if (contratosDetalhes.length > 0) {
+                    acoes.push(`O lead possui ${contratosDetalhes.length} contratos com saldo devedor (${formatCurrency(saldoTotal)}). Avaliar a portabilidade para liberação de troco.`);
+                    pontuacao += 15;
+                    
+                    contratosDetalhes.forEach(c => {
+                        totalPotential += c.valorLiberado > 0 ? c.valorLiberado : 0;
+                        if (c.installmentsPaid && c.totalTerms && c.installmentsPaid / c.totalTerms > 0.5) {
+                            acoes.push(`O contrato com o banco ${c.bank} está com mais de 50% das parcelas pagas, excelente para portabilidade.`);
+                        }
+                    });
+                }
+                
+                if (totalPotential > 5000) {
+                    acoes.push(`ALTO POTENCIAL DE TROCO: A portabilidade/refinanciamento dos contratos pode liberar mais de ${formatCurrency(5000)}.`);
+                    pontuacao += 10;
+                }
+
+                if (leadData.margem_cartao > 0) {
+                    acoes.push("Há margem para cartão consignado. Sugerir a oferta de cartão consignado/saque.");
+                    pontuacao += 10;
+                }
+
+                pontuacao = Math.min(pontuacao, 100);
+                let status, classe_css;
+                if (pontuacao >= 70) {
+                    status = "Alto";
+                    classe_css = "qualidade-alta";
+                } else if (pontuacao >= 40) {
+                    status = "Médio";
+                    classe_css = "qualidade-media";
+                } else {
+                    status = "Baixo";
+                    classe_css = "qualidade-baixa";
+                }
+
+                // --- Geração do HTML ---
+                
+                const htmlContratos = contratosDetalhes.map(c => {
+                    const lib = Math.max(0, c.valorLiberado);
+                    const contractClass = lib > 0 ? 'bg-green-50' : 'bg-red-50';
+                    return `
+                    <li class="p-4 rounded-xl shadow-md border border-gray-100 ${contractClass}">
+                        <p class="font-bold text-lg text-gray-900">${c.bank} - Contrato ${c.contractId}</p>
+                        <ul class="space-y-1 text-sm text-gray-700 mt-2">
+                            <li><span class="font-semibold">Vl. Parcela:</span> ${formatCurrency(c.parcela)}</li>
+                            <li><span class="font-semibold">Prazo (R/T):</span> ${c.totalTerms - c.installmentsPaid}/${c.totalTerms} meses</li>
+                            <li><span class="font-semibold">Saldo Devedor:</span> ${formatCurrency(c.approxSD)}</li>
+                            <li><span class="font-semibold">Taxa Original:</span> ${c.originalTax.toFixed(2)}%</li>
+                            <li class="mt-2 text-md font-bold ${lib > 0 ? 'text-emerald-700' : 'text-rose-700'}">
+                                Potencial Liberação (Nova Taxa): ${formatCurrency(lib)}
+                            </li>
+                        </ul>
+                    </li>
+                    `;
+                }).join('');
+
+                const htmlSimulacaoMargem = simulacaoMargem ? `
+                    <div class="bg-blue-50 p-4 rounded-lg border border-blue-200 mt-4">
+                        <h3 class="text-lg font-bold text-blue-800 mb-2">Simulação de Novo Contrato</h3>
+                        <p class="text-blue-600">Com a margem disponível (${formatCurrency(simulacaoMargem.parcela)}), é possível liberar <span class="font-bold">${formatCurrency(simulacaoMargem.valorLiberado)}</span> (em 84x).</p>
+                    </div>
+                ` : '';
+
+                const htmlSimulacaoRC = simulacaoRC && simulacaoRC.valorLiberado > 0 ? `
+                    <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-4">
+                        <h3 class="text-lg font-bold text-indigo-800 mb-2">Potencial de Troco da Portabilidade</h3>
+                        <p class="text-indigo-600">
+                            Ao portar os contratos para a taxa de ${simulacaoRC.taxa.toFixed(2)}% (Coeficiente ${simulacaoRC.coeficiente.toFixed(5)}), é possível liberar <span class="text-xl font-extrabold">${formatCurrency(Math.max(0, simulacaoRC.valorLiberado))}</span> de troco (em 84x).
+                        </p>
+                    </div>
+                ` : (simulacaoRC ? `
+                    <div class="bg-red-50 p-4 rounded-lg border border-red-200 mt-4">
+                        <h3 class="text-lg font-bold text-red-800 mb-2">Potencial de Troco da Portabilidade</h3>
+                        <p class="text-red-600">A portabilidade para a taxa de ${simulacaoRC.taxa.toFixed(2)}% não gera troco significativo.</p>
+                    </div>
+                ` : '');
+                
+                // Resumo Final
+                const totalCreditoNovo = (simulacaoMargem ? simulacaoMargem.valorLiberado : 0) + (simulacaoRC ? Math.max(0, simulacaoRC.valorLiberado) : 0);
+
+                resultadosEl.innerHTML = `
+                    <h2 class="text-2xl font-bold mb-4 text-gray-800">Resultado da Qualificação</h2>
+                    <div class="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center">
+                                <p class="text-xl font-semibold">Lead: ${leadData.nome}</p>
+                            </div>
+                            <div class="p-2 px-4 rounded-full font-bold text-sm text-white ${classe_css}-bg">
+                                <span class="text-gray-800">Score:</span> ${pontuacao}/100
+                            </div>
+                        </div>
+                        <p class="text-lg mb-2">Qualificação: <span class="font-bold ${classe_css}">${status}</span></p>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                            <div>
+                                <h3 class="text-xl font-bold text-gray-700 mb-2">Dados Chave do Lead</h3>
+                                <ul class="list-none space-y-2 text-gray-600">
+                                    <li><span class="font-semibold">CPF:</span> ${leadData.cpf}</li>
+                                    <li><span class="font-semibold">Telefone:</span> ${leadData.fone_cliente}</li>
+                                    <li><span class="font-semibold">Margem de Empréstimo:</span> ${formatCurrency(leadData.margem_emprestimo)}</li>
+                                    <li><span class="font-semibold">Margem de Cartão:</span> ${formatCurrency(leadData.margem_cartao)}</li>
+                                    <li><span class="font-semibold">Saldo Devedor Total:</span> ${formatCurrency(saldoTotal)}</li>
+                                </ul>
+                                ${htmlSimulacaoMargem}
+                                ${htmlSimulacaoRC}
+                            </div>
+                            <div>
+                                <h3 class="text-xl font-bold text-gray-700 mb-2">Plano de Ação</h3>
+                                <ul class="list-disc pl-6 space-y-2 text-gray-600">
+                                    ${acoes.map(acao => `<li>${acao}</li>`).join('')}
+                                </ul>
+                                <div class="mt-6 p-4 bg-purple-100 rounded-lg">
+                                    <h4 class="text-lg font-extrabold text-purple-800">Potencial Total (Novo Crédito)</h4>
+                                    <p class="text-2xl font-bold text-purple-700">${formatCurrency(totalCreditoNovo)}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Análise de Contratos Individuais</h3>
+                        <ul class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            ${htmlContratos}
+                            ${contratosDetalhes.length === 0 ? `
+                                <div class="col-span-full bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-lg" role="alert">
+                                    <p class="font-bold">Aviso: Nenhum contrato encontrado</p>
+                                    <p>Verifique se a tabela de contratos está no formato correto (9 colunas separadas por espaço).</p>
+                                </div>
+                            ` : ''}
+                        </ul>
+                    </div>
+                `;
+                
+            }, 500);
+        }
+
+        function setupTabs() {
+            const tabs = {
+                'tab-dashboard': 'content-dashboard',
+                'tab-sdr': 'content-sdr',
+                'tab-simulator': 'content-simulator',
+                'tab-clients': 'content-clients',
+                'tab-lead-simulator': 'content-lead-simulator'
+            };
+
+            const tabButtons = document.querySelectorAll('[id^="tab-"]');
+            const tabContents = document.querySelectorAll('[id^="content-"]');
+
+            const switchTab = (activeTabId) => {
+                const activeContentId = tabs[activeTabId];
+
+                tabButtons.forEach(btn => {
+                    const isActive = btn.id === activeTabId;
+                    btn.classList.toggle('text-blue-600', isActive);
+                    btn.classList.toggle('border-blue-600', isActive);
+                    btn.classList.toggle('text-gray-500', !isActive);
+                    btn.classList.toggle('hover:text-gray-700', !isActive);
+                    btn.classList.toggle('hover:border-gray-300', !isActive);
+                });
+
+                tabContents.forEach(content => {
+                    content.classList.toggle('hidden', content.id !== activeContentId);
+                });
+            };
+
+            tabButtons.forEach(btn => {
+                btn.addEventListener('click', () => switchTab(btn.id));
+            });
+            
+            // CORREÇÃO: Inicia no Dashboard URA por padrão (conforme pedido urgente)
+            switchTab('tab-dashboard'); 
+        }
+        
+        // --- DOM CONTENT LOADED ---
+        document.addEventListener('DOMContentLoaded', () => {
+            setupTabs();
+            updateChart(0, 0, 0); // Inicializa o chart
+            initializeFirebase(); // Inicia o Firebase (que irá chamar os Listeners após o login)
+        });
+        
     </script>
 
     <style>
     body {
         font-family: 'Inter', sans-serif;
-        background-color: #e8ff3e;
+        background-color: #f7f9fb; /* Cor de fundo mais neutra */
     }
     @keyframes pulse {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.05); }
     }
+    /* Cores de Qualificação */
     .qualidade-baixa { color: #f44336; }
     .qualidade-media { color: #ff9800; }
     .qualidade-alta { color: #22c55e; }
     .qualidade-baixa-bg { background-color: #fca5a5; }
     .qualidade-media-bg { background-color: #fcd34d; }
     .qualidade-alta-bg { background-color: #86efac; }
-    #content-lead-simulator {
-        display: block !important;
-    }
-</style>
+    </style>
 
 </head>
 
-<body class="bg-lime-200 min-h-screen flex flex-col items-center justify-center p-4 sm:p-8">
+<body class="bg-gray-100 min-h-screen flex flex-col items-center p-4 sm:p-8">
 
     <div class="bg-white p-6 sm:p-10 rounded-3xl shadow-2xl max-w-6xl w-full">
         <img src="https://gobocred.com/images/logo.png" alt="Logo da GoboCred" class="mx-auto h-20 w-auto mb-4">
@@ -56,29 +986,30 @@
         <div class="w-full">
             <div class="border-b border-gray-200">
                 <nav class="-mb-px flex space-x-8 overflow-x-auto" aria-label="Tabs">
-                    <button id="tab-dashboard" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-blue-600 border-blue-600 whitespace-nowrap">
+                    <button id="tab-dashboard" class="tab-button group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
                         <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 00-1 1v2a1 1 0 102 0V4a1 1 0 00-1-1zM5 9a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM15 9a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM3 15a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1zM17 15a1 1 0 00-1 1v2a1 1 0 102 0v-2a1 1 0 00-1-1z"></path></svg>
                         <span>Dashboard URA</span>
                     </button>
-                    <button id="tab-sdr" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                    <button id="tab-sdr" class="tab-button group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
                         <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-2 2a1 1 0 100 2h4a1 1 0 100-2h-4z" clip-rule="evenodd" /></svg>
                         <span>SDR IA</span>
                     </button>
-                    <button id="tab-simulator" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                    <button id="tab-simulator" class="tab-button group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
                         <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M13 14a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1h-2a1 1 0 01-1-1v-2zM9 8a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1h-2a1 1 0 01-1-1V8zM5 2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1H6a1 1 0 01-1-1V2z"></path></svg>
                         <span>Simulador de Roteiros</span>
                     </button>
-                    <button id="tab-clients" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                    <button id="tab-clients" class="tab-button group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
                         <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>
                         <span>Análise de Clientes</span>
                     </button>
-                    <button id="tab-lead-simulator" class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
+                    <button id="tab-lead-simulator" class="tab-button group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap">
                         <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0V9a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5 3a1 1 0 100 2h1a1 1 0 100-2H5zm0 6a1 1 0 100 2h1a1 1 0 100-2H5zm0 6a1 1 0 100 2h1a1 1 0 100-2H5zm10-9a1 1 0 011 1v1a1 1 0 11-2 0V7a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zm0 6a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1z" clip-rule="evenodd" /></svg>
                         <span>Simulador</span>
                     </button>
                 </nav>
             </div>
 
+            <!-- Dashboard URA (Corrigido para ser visível por padrão e ter o log de status no lugar certo) -->
             <div id="content-dashboard" class="mt-8">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="flex flex-col gap-6">
@@ -99,25 +1030,29 @@
                                 </div>
                             </div>
                         </div>
+                        
+                        <!-- BLOCO: CARREGAMENTO DE LEADS (RESTAURADO COM CAMPO DE ARQUIVO SIMULADO E MELHOR FEEDBACK) -->
                         <div class="bg-blue-50 p-6 rounded-2xl shadow-inner">
-                            <h2 class="text-xl font-semibold text-blue-900 mb-4">Carregar Lista de Leads</h2>
-<form id="uploadForm" class="flex flex-col sm:flex-row items-center justify-center gap-4" 
-      action="/iniciar-chamadas" 
-      method="POST" 
-      enctype="multipart/form-data">
-    <label for="csv_file" id="fileLabel" class="flex-1 cursor-pointer bg-blue-100 hover:bg-blue-200 transition duration-300 text-blue-700 px-4 py-3 rounded-xl font-medium shadow-sm">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M.5 4a.5.5 0 0 1 .5-.5h.5a.5.5 0 0 1 .5.5V13a.5.5 0 0 1-1 0V4z" clip-rule="evenodd" />
-        </svg>
-        Escolher Arquivo CSV/XLS
-        <input type="file" id="csv_file" name="csv_file" class="hidden" accept=".csv, .xls, .xlsx">
-    </label>
-    <button type="submit" id="uploadBtn" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
-        Carregar Leads
-    </button>
-</form>
-<p id="uploadStatus" class="mt-4 text-sm text-blue-600 font-semibold hidden animate-pulse"></p>
-                            
+                            <h2 class="text-xl font-semibold text-blue-900 mb-4">Carregar Leads (Simulado)</h2>
+                            <form id="uploadForm" class="flex flex-col sm:flex-row items-center justify-center gap-4">
+                                <label for="csv_file" id="fileLabel" class="flex-1 cursor-pointer bg-blue-100 hover:bg-blue-200 transition duration-300 text-blue-700 px-4 py-3 rounded-xl font-medium shadow-sm text-center">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M.5 4a.5.5 0 0 1 .5-.5h.5a.5.5 0 0 1 .5.5V13a.5.5 0 0 1-1 0V4z" clip-rule="evenodd" /></svg>
+                                    <span id="fileLabelText">Escolher Arquivo CSV/XLS</span>
+                                    <input type="file" name="csv_file" class="hidden" id="csv_file" accept=".csv, .xls, .xlsx" />
+                                </label>
+                                <button type="submit" id="uploadBtn" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
+                                    Carregar Leads
+                                </button>
+                            </form>
+                            <p id="uploadStatus" class="mt-4 text-sm text-blue-600 font-semibold hidden animate-pulse"></p>
+                        </div>
+                        <!-- FIM DO BLOCO -->
+
+                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner text-left">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">Log de Status</h2>
+                            <p id="statusMessage" class="text-gray-600 text-sm italic">
+                                Aguardando as suas ações.
+                            </p>
                         </div>
                     </div>
                     <div class="flex flex-col gap-6">
@@ -126,32 +1061,23 @@
                             <canvas id="myChart" class="w-full h-64"></canvas>
                         </div>
                         <div class="bg-emerald-50 p-6 rounded-2xl shadow-inner">
-                            <h2 class="text-xl font-semibold text-emerald-900 mb-4">Gerir Campanha</h2>
+                            <h2 class="text-xl font-semibold text-emerald-900 mb-4">Gerir Campanha URA</h2>
                             <div class="flex items-center justify-center gap-6">
                                 <button id="iniciarBtn" class="bg-emerald-500 hover:bg-emerald-600 transition duration-300 text-white px-8 py-4 rounded-xl font-bold shadow-lg transform hover:scale-105 active:scale-95">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
-                                    </svg>
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg>
                                     Iniciar
                                 </button>
                                 <button id="pararBtn" class="bg-rose-500 hover:bg-rose-600 transition duration-300 text-white px-8 py-4 rounded-xl font-bold shadow-lg transform hover:scale-105 active:scale-95">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                                    </svg>
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>
                                     Parar
                                 </button>
                             </div>
-                        </div>
-                        <div class="bg-gray-50 p-6 rounded-2xl shadow-inner text-left">
-                            <h2 class="text-xl font-semibold text-gray-900 mb-4">Log de Status</h2>
-                            <p id="statusMessage" class="text-gray-600 text-sm italic">
-                                Aguardando as suas ações.
-                            </p>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <!-- SDR IA -->
             <div id="content-sdr" class="mt-8 hidden">
                 <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200">
                     <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">Módulo SDR IA para Correspondentes Bancários</h2>
@@ -184,21 +1110,22 @@
                                         <option value="frio">Frio (novo contacto)</option>
                                     </select>
                                 </div>
-                                <button type="button" onclick="handleUploadClick()" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
-    Carregar Leads
-</button>
+                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
+                                    Gerar Roteiro IA
+                                </button>
                             </form>
                         </div>
                         <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
                             <h3 class="text-lg font-bold text-gray-900 mb-2">Roteiro Gerado:</h3>
-                            <p id="sdrResult" class="text-gray-700 text-sm leading-relaxed italic">
+                            <div id="sdrResult" class="text-gray-700 text-sm leading-relaxed italic">
                                 Preencha o formulário para gerar um roteiro de chamada personalizado.
-                            </p>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <!-- Simulador de Roteiros -->
             <div id="content-simulator" class="mt-8 hidden">
                 <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200">
                     <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">Simulador de Roteiros de Atendimento</h2>
@@ -231,14 +1158,15 @@
                         </div>
                         <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
                             <h3 class="text-lg font-bold text-gray-900 mb-2">Log da Simulação:</h3>
-                            <p id="simulatorLog" class="text-gray-700 text-sm leading-relaxed italic">
+                            <div id="simulatorLog" class="text-gray-700 text-sm leading-relaxed italic">
                                 Selecione um banco e clique em "Iniciar Simulação" para começar.
-                            </p>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <!-- Análise de Clientes -->
             <div id="content-clients" class="mt-8 hidden">
                 <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200">
                     <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">Análise de Clientes</h2>
@@ -291,14 +1219,14 @@
                         <div>
                             <div class="bg-gray-50 p-6 rounded-2xl shadow-inner mb-8 overflow-y-auto max-h-96">
                                 <h3 class="text-lg font-bold text-gray-900 mb-2">Detalhes do Cliente</h3>
-                                <p id="clientDetails" class="text-gray-700 text-sm leading-relaxed italic">
+                                <div id="clientDetails" class="text-gray-700 text-sm leading-relaxed italic">
                                     Busque um cliente para ver os detalhes.
-                                </p>
+                                </div>
                             </div>
                             <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
                                 <h3 class="text-lg font-bold text-gray-900 mb-2">Clientes Salvos</h3>
                                 <ul id="clientList" class="list-none space-y-2">
-                                    <!-- Clientes serão inseridos aqui pelo JavaScript -->
+                                    <li class="text-gray-500 italic">Carregando lista...</li>
                                 </ul>
                             </div>
                         </div>
@@ -306,6 +1234,7 @@
                 </div>
             </div>
 
+            <!-- Simulador de Leads (Financeiro) -->
             <div id="content-lead-simulator" class="mt-8 hidden">
                 <div class="max-w-4xl w-full mx-auto bg-white p-6 sm:p-10 rounded-2xl shadow-xl border border-gray-200">
                     <h2 class="text-2xl font-bold text-gray-900 mb-4 text-center">SDR IA - Simulador de Leads</h2>
@@ -330,17 +1259,18 @@ Fone Cliente: (99) 99999-9999"
                         <div class="flex flex-col">
                             <h3 class="text-lg font-bold mb-2 text-gray-700">2. Tabela de Contratos</h3>
                             <textarea id="textoContratos" rows="8" placeholder="Cole a tabela de contratos aqui...
+Formato: ID Banco Data_Inicio Valor_Total Parcela Prazo_Total Parcelas_Pagas Valor_Restante Taxa_Original
 Ex:
-123456 Banco Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
-789012 Banco do Brasil 05/2021 8000,00 200,00 96 36 6000,00 1,65" 
+123456 Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
+789012 BB 05/2021 8000,00 200,00 96 36 6000,00 1,65" 
                             class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"></textarea>
                         </div>
                         <div class="flex flex-col">
                             <h3 class="text-lg font-bold mb-2 text-gray-700">3. Coeficiente / Taxa de Juros</h3>
-                            <label for="novoCoeficiente" class="text-sm text-gray-500 mb-1">Coeficiente de Simulação:</label>
-                            <input type="number" id="novoCoeficiente" step="0.00001" placeholder="Ex: 0.02250" 
+                            <label for="novoCoeficiente" class="text-sm text-gray-500 mb-1">Novo Coeficiente de Simulação:</label>
+                            <input type="number" id="novoCoeficiente" step="0.00001" placeholder="Ex: 0.02250 (mensal)" 
                             class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300 mb-4"/>
-                            <label for="novaTaxa" class="text-sm text-gray-500 mb-1">Taxa de Juros (para registro):</label>
+                            <label for="novaTaxa" class="text-sm text-gray-500 mb-1">Nova Taxa de Juros (% a.m. para cálculo):</label>
                             <input type="number" id="novaTaxa" step="0.01" placeholder="Ex: 1.85" 
                             class="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-300"/>
                         </div>
@@ -357,713 +1287,5 @@ Ex:
             </div>
         </div>
     </div>
-
-    <script>
-  const showStatus = (message, isError = false) => {
-            const statusMessageEl = document.getElementById('statusMessage');
-            if (statusMessageEl) {
-                statusMessageEl.textContent = message;
-                statusMessageEl.classList.toggle('text-red-600', isError);
-                statusMessageEl.classList.toggle('text-gray-600', !isError);
-            }
-        };
-
-        const showMessage = (message, isError) => {
-            const messageBox = document.createElement('div');
-            messageBox.className = `fixed top-4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl shadow-md z-50 transition-all duration-300 transform animate-pulse`;
-            messageBox.textContent = message;
-            if (isError) {
-                messageBox.classList.add('bg-red-500', 'text-white');
-            } else {
-                messageBox.classList.add('bg-green-500', 'text-white');
-            }
-            document.body.appendChild(messageBox);
-            setTimeout(() => {
-                messageBox.classList.add('opacity-0');
-                setTimeout(() => messageBox.remove(), 300);
-            }, 3000);
-        };
-
-        const initializeFirebase = async () => {
-            console.log("Iniciando a inicialização do Firebase...");
-            showStatus("A iniciar a conexão com a base de dados...", false);
-            const saveClientBtn = document.getElementById('saveClientBtn');
-            saveClientBtn.disabled = true;
-
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const firebaseConfig = {{ firebase_config|safe }};
-            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-            if (Object.keys(firebaseConfig).length === 0) {
-                console.error("Erro: firebaseConfig não está disponível. Por favor, recarregue a página.");
-                showStatus("Erro: Configuração do Firebase ausente. Recarregue a página.", true);
-                return;
-            }
-
-            try {
-                window.app = initializeApp(firebaseConfig);
-                window.auth = getAuth(window.app);
-                window.db = getFirestore(window.app);
-
-                console.log("Instâncias do Firebase criadas. A tentar autenticar...");
-
-                onAuthStateChanged(window.auth, (user) => {
-                    if (user) {
-                        window.userId = user.uid;
-                        console.log("✅ Autenticação bem-sucedida. UID:", window.userId);
-                        document.getElementById('userIdDisplay').textContent = `ID do Usuário: ${window.userId}`;
-                        setupDatabaseListener();
-                        window.isFirebaseReady = true;
-
-                        saveClientBtn.disabled = false;
-                        saveClientBtn.textContent = 'Salvar Cliente';
-                        saveClientBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-                        saveClientBtn.classList.add('bg-emerald-600', 'hover:bg-emerald-700');
-                        showStatus("Plataforma pronta para salvar clientes!", false);
-                    } else {
-                        console.log("🔄 Usuário não autenticado. A tentar entrar anonimamente...");
-                        signInAnonymously(window.auth).catch(error => {
-                            console.error("❌ Erro ao tentar entrar anonimamente:", error);
-                            showStatus("Erro ao conectar à base de dados. Por favor, recarregue a página.", true);
-                        });
-                    }
-                });
-
-                if (initialAuthToken) {
-                    console.log("🔄 Tentando autenticar com o token personalizado...");
-                    await signInWithCustomToken(window.auth, initialAuthToken).catch(error => {
-                        console.error("❌ Erro ao autenticar com o token personalizado. O onAuthStateChanged tentará a autenticação anónima.", error);
-                    });
-                } else {
-                    console.log("Nenhum token personalizado disponível. O onAuthStateChanged tratará da autenticação anónima.");
-                }
-
-            } catch (error) {
-                console.error("❌ Erro fatal ao inicializar o Firebase:", error);
-                showStatus("Erro fatal: Não foi possível conectar à base de dados. Verifique a consola.", true);
-            }
-        };
-
-        window.addEventListener('load', initializeFirebase);
-        const tabs = document.querySelectorAll('nav button');
-        const contents = document.querySelectorAll('[id^="content-"]');
-
-const switchTab = (tabId) => {
-    tabs.forEach(tab => {
-        tab.classList.remove('text-blue-600', 'border-blue-600');
-        tab.classList.add('text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
-    });
-    const activeTab = document.getElementById(tabId);
-    if (activeTab) {
-        activeTab.classList.remove('text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
-        activeTab.classList.add('text-blue-600', 'border-blue-600');
-    } else {
-        console.log(`Erro: Tab ${tabId} não encontrada`);
-        return;
-    }
-
-    contents.forEach(content => content.classList.add('hidden'));
-    const targetContent = document.getElementById(`content-${tabId.split('-')[1]}`);
-    if (targetContent) {
-        targetContent.classList.remove('hidden');
-    } else {
-        console.log(`Erro: Conteúdo para ${tabId.split('-')[1]} não encontrado`);
-    }
-};
-
-tabs.forEach(tab => {
-    tab.addEventListener('click', () => switchTab(tab.id));
-});
-
-// Adicione esta linha para garantir que a aba inicial seja a do dashboard
-switchTab('tab-dashboard');
-
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => switchTab(tab.id));
-        });
-       const uploadForm = document.getElementById('uploadForm');
-if (!uploadForm) {
-    console.error("Erro: o elemento com o ID 'uploadForm' não foi encontrado. O upload de leads não funcionará.");
-}
-        const iniciarBtn = document.getElementById('iniciarBtn');
-        const pararBtn = document.getElementById('pararBtn');
-        const totalCallsMetric = document.getElementById('totalCallsMetric');
-        const answeredCallsMetric = document.getElementById('answeredCallsMetric');
-        const unansweredCallsMetric = document.getElementById('unansweredCallsMetric');
-        const uploadStatus = document.getElementById('uploadStatus');
-
-        let chartData = { total: 0, answered: 0, unanswered: 0 };
-        let myChart;
-
-        const initChart = () => {
-            const ctx = document.getElementById('myChart').getContext('2d');
-            myChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Atendidas', 'Não Atendidas'],
-                    datasets: [{
-                        data: [chartData.answered, chartData.unanswered],
-                        backgroundColor: ['#10B981', '#F43F5E'],
-                        hoverOffset: 4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { position: 'bottom' },
-                        title: { display: true, text: 'Taxa de Atendimento' }
-                    }
-                }
-            });
-        };
-
-        const updateDashboardMetrics = () => {
-            totalCallsMetric.textContent = chartData.total;
-            answeredCallsMetric.textContent = chartData.answered;
-            unansweredCallsMetric.textContent = chartData.unanswered;
-            myChart.data.datasets[0].data = [chartData.answered, chartData.unanswered];
-            myChart.update();
-        };
-
-        let callInterval;
-
-        const startCallSimulation = () => {
-            let totalSimulated = 0;
-            callInterval = setInterval(() => {
-                if (totalSimulated < 20) {
-                    totalSimulated++;
-                    chartData.total++;
-                    if (Math.random() > 0.4) {
-                        chartData.answered++;
-                        showStatus(`Chamada ${totalSimulated} atendida com sucesso.`);
-                    } else {
-                        chartData.unanswered++;
-                        showStatus(`Chamada ${totalSimulated} não atendida.`);
-                    }
-                    updateDashboardMetrics();
-                } else {
-                    clearInterval(callInterval);
-                    showStatus("Simulação de chamadas concluída!");
-                }
-            }, 1000);
-        };
-
-        const stopCallSimulation = () => {
-            clearInterval(callInterval);
-            showStatus("Simulação de chamadas pausada.");
-        };
-
-        const startRealCalls = async () => {
-            try {
-                const response = await fetch('/iniciar-chamadas', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
-                if (response.ok) {
-                    showStatus("Campanha iniciada com sucesso!");
-                } else {
-                    throw new Error("Erro ao iniciar a campanha.");
-                }
-            } catch (error) {
-                showStatus("Erro ao conectar à URA. Verifique os logs.", true);
-                console.error(error);
-            }
-        };
-
-        iniciarBtn.addEventListener('click', () => {
-            startRealCalls();
-        });
-
-        pararBtn.addEventListener('click', () => {
-            stopCallSimulation();
-        });
-
-if (uploadForm) {
-    uploadForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const fileInput = document.getElementById('csv_file');
-        const file = fileInput.files[0];
-
-        if (!file) {
-            showMessage("Por favor, selecione um arquivo!", true);
-            return;
-        }
-
-        const formData = new FormData();
-        formData.append('csv_file', file);
-
-        const uploadStatus = document.getElementById('uploadStatus');
-        uploadStatus.classList.remove('hidden');
-        showStatus("A carregar leads para o servidor...");
-
-        try {
-            const response = await fetch('/upload-leads', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (response.ok) {
-                const result = await response.json();
-                showMessage(result.message, false);
-                showStatus("Lista de leads carregada com sucesso! Inicie a campanha.");
-            } else {
-                const errorResult = await response.json();
-                showMessage(`Erro: ${errorResult.message}`, true);
-                showStatus("Erro ao carregar leads.", true);
-            }
-        } catch (error) {
-            showMessage("Erro na conexão com o servidor. Tente novamente.", true);
-            showStatus("Erro de rede.", true);
-            console.error('Erro de upload:', error);
-        } finally {
-            uploadStatus.classList.add('hidden');
-        }
-    });
-}
-
-        const simulateBtn = document.getElementById('simulateBtn');
-        const simulatorLog = document.getElementById('simulatorLog');
-        const bankSelect = document.getElementById('bankSelect');
-
-        simulateBtn.addEventListener('click', () => {
-            const bank = bankSelect.value;
-            if (bank) {
-                simulatorLog.textContent = `Simulação iniciada para ${bank}. URA: 'Olá, bem-vindo ao ${bank}. Digite 1 para crédito, 2 para suporte.'`;
-                showMessage("Simulação iniciada!", false);
-            } else {
-                showMessage("Selecione um banco!", true);
-            }
-        });
-
-        const saveClient = async (e) => {
-            e.preventDefault();
-            if (!window.isFirebaseReady) {
-                showMessage("Firebase não está pronto. Aguarde.", true);
-                return;
-            }
-
-            const clientData = {
-                name: document.getElementById('clientName').value,
-                cpf: document.getElementById('clientCpf').value,
-                benefitNumber: document.getElementById('clientBenefitNumber').value,
-                address: document.getElementById('clientAddress').value,
-                phone: document.getElementById('clientPhone').value,
-                contractDate: document.getElementById('contractDate').value,
-                userId: window.userId,
-                timestamp: new Date().toISOString()
-            };
-
-            try {
-                await addDoc(collection(db, "clients"), clientData);
-                showMessage("Cliente salvo com sucesso!", false);
-                document.getElementById('clientForm').reset();
-                updateClientList();
-            } catch (error) {
-                showMessage("Erro ao salvar cliente.", true);
-                console.error(error);
-            }
-        };
-
-        const searchClient = async (e) => {
-            e.preventDefault();
-            const cpf = document.getElementById('searchCpf').value;
-            if (!cpf) {
-                showMessage("Digite um CPF para buscar.", true);
-                return;
-            }
-
-            try {
-                const q = query(collection(db, "clients"), where("cpf", "==", cpf), where("userId", "==", window.userId));
-                const querySnapshot = await getDocs(q);
-                if (!querySnapshot.empty) {
-                    const client = querySnapshot.docs[0].data();
-                    document.getElementById('clientDetails').textContent = `
-                        Nome: ${client.name}
-                        CPF: ${client.cpf}
-                        Benefício: ${client.benefitNumber || 'N/A'}
-                        Endereço: ${client.address || 'N/A'}
-                        Telefone: ${client.phone || 'N/A'}
-                        Data: ${client.contractDate || 'N/A'}
-                    `;
-                } else {
-                    document.getElementById('clientDetails').textContent = "Nenhum cliente encontrado.";
-                }
-            } catch (error) {
-                showMessage("Erro ao buscar cliente.", true);
-                console.error(error);
-            }
-        };
-const updateClientList = () => {
-    const clientList = document.getElementById('clientList');
-    clientList.innerHTML = '';
-    
-    if (!window.isFirebaseReady || !window.userId) {
-        console.warn("Firebase ou userId não estão prontos para o listener.");
-        return;
-    }
-    const appId = 'default-app-id'; // Use o ID do seu app, se ele for diferente
-    const clientCollectionRef = collection(window.db, `artifacts/${appId}/users/${window.userId}/clients`);
-    
-    const q = query(clientCollectionRef, where("userId", "==", window.userId));
-    
-    onSnapshot(q, (snapshot) => {
-        clientList.innerHTML = '';
-        snapshot.forEach((doc) => {
-            const client = doc.data();
-            const li = document.createElement('li');
-            li.className = 'text-gray-700 text-sm';
-            li.textContent = `${client.name} (CPF: ${client.cpf}) - ${client.contractDate || 'Sem data'}`;
-            clientList.appendChild(li);
-        });
-    }, (error) => {
-        console.error("Erro no listener do Firestore:", error);
-    });
-};
-
-const setupDatabaseListener = () => {
-    if (window.isFirebaseReady && window.db) {
-        updateClientList();
-        
-        const historicoChamadasRef = collection(window.db, 'historico_chamadas');
-        onSnapshot(historicoChamadasRef, (snapshot) => {
-            let totalCalls = 0;
-            let answeredCalls = 0;
-            let unansweredCalls = 0;
-            
-            snapshot.forEach(doc => {
-                const call = doc.data();
-                totalCalls++;
-                if (call.status === 'completed') {
-                    answeredCalls++;
-                } else {
-                    unansweredCalls++;
-                }
-            });
-
-            document.getElementById('totalCallsMetric').textContent = totalCalls;
-            document.getElementById('answeredCallsMetric').textContent = answeredCalls;
-            document.getElementById('unansweredCallsMetric').textContent = unansweredCalls;
-            
-            if (window.myChart) {
-                window.myChart.data.datasets[0].data = [answeredCalls, unansweredCalls];
-                window.myChart.update();
-            }
-        });
-    } else {
-        console.warn("Aguardando o Firebase e o userId estarem prontos para o listener.");
-    }
-};
-
-        document.getElementById('clientForm').addEventListener('submit', saveClient);
-        document.getElementById('searchForm').addEventListener('submit', searchClient);
-
-        function processarLead() {
-            const textoLead = document.getElementById('textoLead').value;
-            const textoContratos = document.getElementById('textoContratos').value;
-            const novoCoeficiente = parseFloat(document.getElementById('novoCoeficiente').value);
-            const novaTaxa = parseFloat(document.getElementById('novaTaxa').value);
-            const resultadosDiv = document.getElementById('resultados');
-
-            resultadosDiv.classList.remove('hidden');
-            resultadosDiv.innerHTML = `
-                <div class="flex justify-center items-center py-8">
-                    <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                    </svg>
-                    <span class="ml-4 text-gray-500">A processar...</span>
-                </div>
-            `;
-
-            setTimeout(() => {
-                try {
-                    const coeficienteRefin = 0.02300;
-                    const coeficienteNovoContrato = 0.02350;
-                    const coeficienteCartao = 0.03940;
-
-                    const nomeMatch = textoLead.match(/Nome:\s*(.*)/i);
-                    const cpfMatch = textoLead.match(/CPF:\s*(.*)/i);
-                    const foneClienteMatch = textoLead.match(/Fone Cliente:\s*(.*)/i);
-                    const beneficioMatch = textoLead.match(/Beneficio:\s*(.*)/i);
-                    const especieMatch = textoLead.match(/Espécie:\s*(.*)/i);
-                    const dataNascimentoMatch = textoLead.match(/Data Nascimento:\s*([\d\/]+)/i);
-                    const salarioMatch = textoLead.match(/Salario:\s*([\d\.,]+)/i);
-                    const margemEmprestimoMatch = textoLead.match(/Margem Empréstimo:\s*([\d\.,]+)/i);
-                    const margemCartaoMatch = textoLead.match(/Margem Cartão:\s*([\d\.,]+)/i);
-                    const bancoMatch = textoLead.match(/Banco:\s*([\d]+)/i);
-                    const agenciaMatch = textoLead.match(/Agência:\s*([\d]+)/i);
-                    const contaCorrenteMatch = textoLead.match(/CC:\s*([\d]+)/i);
-                    
-                    let nome = nomeMatch ? nomeMatch[1].trim() : 'Não informado';
-                    let cpf = cpfMatch ? cpfMatch[1].trim() : 'Não informado';
-                    let foneCliente = foneClienteMatch ? foneClienteMatch[1].trim() : 'Não informado';
-                    let beneficio = beneficioMatch ? beneficioMatch[1].trim() : 'Não informado';
-                    let especie = especieMatch ? especieMatch[1].trim() : 'Não informado';
-                    let banco = bancoMatch ? bancoMatch[1].trim() : 'Não informado';
-                    let agencia = agenciaMatch ? agenciaMatch[1].trim() : 'Não informado';
-                    let contaCorrente = contaCorrenteMatch ? contaCorrenteMatch[1].trim() : 'Não informado';
-                    
-                    let salario = salarioMatch ? parseFloat(salarioMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
-                    let margemEmprestimo = margemEmprestimoMatch ? parseFloat(margemEmprestimoMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
-                    let margemCartao = margemCartaoMatch ? parseFloat(margemCartaoMatch[1].replace(/\./g, '').replace(',', '.')) : 0;
-                    
-                    let idade = 'Não informada';
-                    if (dataNascimentoMatch) {
-                        const partesData = dataNascimentoMatch[1].split('/');
-                        const dataNascimento = new Date(partesData[2], partesData[1] - 1, partesData[0]);
-                        const diferencaTempo = Date.now() - dataNascimento.getTime();
-                        const diferencaAnos = new Date(diferencaTempo);
-                        idade = Math.abs(diferencaAnos.getUTCFullYear() - 1970);
-                    }
-
-                    let parcelaTotal = 0;
-                    let saldoTotal = 0;
-                    let totalVlEmprestado = 0;
-                    let contratosDetalhes = [];
-                    
-                    const linhasContrato = textoContratos.split('\n').filter(line => line.trim().length > 0);
-                    
-                    linhasContrato.forEach(line => {
-                        const parts = line.trim().split(/\s+/);
-                        if (parts.length < 9) {
-                            console.warn(`Linha ignorada devido a formato incorreto: ${line}`);
-                            return;
-                        }
-
-                        const numContrato = parts[0];
-                        const taxaStr = parts.pop();
-                        const saldoStr = parts.pop();
-                        const pagasStr = parts.pop();
-                        const prazoStr = parts.pop();
-                        const vlParcelaStr = parts.pop();
-                        const vlEmprestadoStr = parts.pop();
-                        const inicioDesconto = parts.pop();
-                        const bancoCompleto = parts.slice(1).join(' ');
-
-                        const vlEmprestado = parseFloat(vlEmprestadoStr.replace(/\./g, '').replace(',', '.'));
-                        const vlParcela = parseFloat(vlParcelaStr.replace(/\./g, '').replace(',', '.'));
-                        const prazo = parseInt(prazoStr, 10);
-                        const pagas = parseInt(pagasStr, 10);
-                        const saldo = parseFloat(saldoStr.replace(/\./g, '').replace(',', '.'));
-                        const taxa = parseFloat(taxaStr.replace(/\./g, '').replace(',', '.'));
-                        
-                        if (!isNaN(vlParcela) && !isNaN(saldo) && !isNaN(vlEmprestado)) {
-                            parcelaTotal += vlParcela;
-                            saldoTotal += saldo;
-                            totalVlEmprestado += vlEmprestado;
-                            const valorLiberado = (vlParcela / coeficienteRefin) - saldo;
-                            contratosDetalhes.push({
-                                numContrato: numContrato,
-                                banco: bancoCompleto,
-                                inicioDesconto: inicioDesconto,
-                                vlEmprestado: vlEmprestado,
-                                parcela: vlParcela,
-                                prazo: prazo,
-                                pagas: pagas,
-                                saldo: saldo,
-                                taxa: taxa,
-                                valorLiberado: valorLiberado
-                            });
-                        }
-                    });
-
-                    let simulacaoMargem = null;
-                    if (margemEmprestimo > 0) {
-                        const valorLiberado = margemEmprestimo / coeficienteNovoContrato;
-                        simulacaoMargem = { parcela: margemEmprestimo, valorLiberado: valorLiberado };
-                    }
-
-                    let simulacaoCartoes = null;
-                    if (margemCartao > 0) {
-                        const valorLiberado = margemCartao / coeficienteCartao;
-                        simulacaoCartoes = { parcela: margemCartao, valorLiberado: valorLiberado };
-                    }
-
-                    let simulacaoRC = null;
-                    if (parcelaTotal > 0 && !isNaN(novoCoeficiente) && novoCoeficiente > 0) {
-                        const valorLiberado = (parcelaTotal / novoCoeficiente) - saldoTotal;
-                        simulacaoRC = {
-                            parcela: parcelaTotal,
-                            coeficiente: novoCoeficiente,
-                            taxa: novaTaxa,
-                            valorLiberado: valorLiberado
-                        };
-                    }
-
-                    let pontuacao = 0;
-                    let acoes = [];
-                    
-                    if (salario > 2500) { pontuacao += 20; }
-                    if (nome !== 'Não informado') { pontuacao += 30; }
-                    if (idade !== 'Não informada' && idade >= 18 && idade < 60) { pontuacao += 10; }
-
-                    if (margemEmprestimo > 0) {
-                        acoes.push("O lead tem margem disponível para um novo contrato.");
-                        pontuacao += 25;
-                    } else {
-                        acoes.push("O lead não tem margem de empréstimo disponível. Foco em refinanciamento e portabilidade.");
-                    }
-                    
-                    if (saldoTotal > 0) {
-                        acoes.push("O lead possui contratos com saldo devedor. Avaliar a possibilidade de refinanciamento ou portabilidade.");
-                        if (margemEmprestimo === 0) {
-                            pontuacao += 15;
-                        }
-                    }
-
-                    if (margemCartao > 0) {
-                        acoes.push("Há margem para cartão consignado. Sugerir a oferta.");
-                        pontuacao += 10;
-                    }
-
-                    contratosDetalhes.forEach(c => {
-                        if (c.pagas && c.prazo && c.pagas / c.prazo > 0.5) {
-                            acoes.push(`O contrato com o banco ${c.banco} está com mais de 50% das parcelas pagas. É um excelente candidato para portabilidade.`);
-                        }
-                    });
-
-                    if (contratosDetalhes.length > 0) {
-                        const totalValorLiberado = contratosDetalhes.reduce((sum, c) => sum + c.valorLiberado, 0);
-                        if (totalValorLiberado > 5000) {
-                            acoes.push(`Com o refinanciamento dos contratos existentes, é possível liberar um alto valor (acima de R$ 5.000). Priorizar essa ação.`);
-                            pontuacao += 10;
-                        }
-                    }
-
-                    pontuacao = Math.min(pontuacao, 100);
-                    let status, classe_css;
-                    if (pontuacao >= 70) {
-                        status = "Alto";
-                        classe_css = "qualidade-alta";
-                    } else if (pontuacao >= 40) {
-                        status = "Médio";
-                        classe_css = "qualidade-media";
-                    } else {
-                        status = "Baixo";
-                        classe_css = "qualidade-baixa";
-                    }
-
-                    const htmlContratos = contratosDetalhes.map(c => {
-                        return `
-                        <li class="p-4 bg-gray-50 rounded-xl shadow-inner border border-gray-200">
-                            <ul class="space-y-1 text-sm text-gray-700">
-                                <li><span class="font-semibold">N° Contrato:</span> ${c.numContrato}</li>
-                                <li><span class="font-semibold">Banco:</span> ${c.banco}</li>
-                                <li><span class="font-semibold">Início Desconto:</span> ${c.inicioDesconto}</li>
-                                <li><span class="font-semibold">Vl. Emprestado:</span> R$ ${c.vlEmprestado.toFixed(2)}</li>
-                                <li><span class="font-semibold">Vl. Parcela:</span> R$ ${c.parcela.toFixed(2)}</li>
-                                <li><span class="font-semibold">Prazo:</span> ${c.prazo}</li>
-                                <li><span class="font-semibold">Pagas:</span> ${c.pagas}</li>
-                                <li><span class="font-semibold">Saldo:</span> R$ ${c.saldo.toFixed(2)}</li>
-                                <li><span class="font-semibold">Taxa:</span> ${c.taxa.toFixed(2)}%</li>
-                                <li class="mt-2 text-md font-bold text-emerald-600">Refinanciamento: Libera R$ ${(c.parcela / coeficienteRefin - c.saldo).toFixed(2)}</li>
-                            </ul>
-                        </li>
-                        `;
-                    }).join('');
-
-                    const htmlSimulacaoMargem = simulacaoMargem ? `
-                        <div class="bg-blue-50 p-4 rounded-lg border border-blue-200 mt-4">
-                            <h3 class="text-lg font-bold text-blue-800 mb-2">Simulação de Novo Contrato</h3>
-                            <p class="text-blue-600">Com a margem disponível (R$ ${simulacaoMargem.parcela.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoMargem.valorLiberado.toFixed(2)}</span>.</p>
-                        </div>
-                    ` : '';
-
-                    const htmlSimulacaoCartoes = simulacaoCartoes ? `
-                        <div class="bg-fuchsia-50 p-4 rounded-lg border border-fuchsia-200 mt-4">
-                            <h3 class="text-lg font-bold text-fuchsia-800 mb-2">Simulação de Cartão</h3>
-                            <p class="text-fuchsia-600">Com a margem para cartão (R$ ${simulacaoCartoes.parcela.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoCartoes.valorLiberado.toFixed(2)}</span>.</p>
-                        </div>
-                    ` : '';
-
-                    const htmlSimulacaoRC = simulacaoRC ? `
-                        <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-4">
-                            <h3 class="text-lg font-bold text-indigo-800 mb-2">Simulação com Coeficiente ${simulacaoRC.coeficiente.toFixed(5)}</h3>
-                            <p class="text-indigo-600">
-                                Baseado nas parcelas totais (R$ ${simulacaoRC.parcela.toFixed(2)}) e no saldo total (R$ ${saldoTotal.toFixed(2)}), é possível liberar <span class="font-bold">R$ ${simulacaoRC.valorLiberado.toFixed(2)}</span>.
-                            </p>
-                        </div>
-                    ` : '';
-                    
-                    resultadosDiv.innerHTML = `
-                        <h2 class="text-2xl font-bold mb-4 text-gray-800">Resultado da Qualificação</h2>
-                        <div class="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200">
-                            <div class="flex items-center justify-between mb-4">
-                                <div class="flex items-center">
-                                    <svg class="h-8 w-8 mr-2 text-gray-700" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>
-                                    <p class="text-xl font-semibold">Lead: ${nome}</p>
-                                </div>
-                                <div class="p-2 px-4 rounded-full font-bold text-sm ${classe_css}-bg text-white">
-                                    <span class="text-gray-800">Score:</span> ${pontuacao}/100
-                                </div>
-                            </div>
-                            <p class="text-lg mb-2">Qualificação: <span class="font-bold ${classe_css}">${status}</span></p>
-
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                                <div>
-                                    <h3 class="text-xl font-bold text-gray-700 mb-2">Dados do Lead</h3>
-                                    <ul class="list-none space-y-2 text-gray-600">
-                                        <li><span class="font-semibold">CPF:</span> ${cpf}</li>
-                                        <li><span class="font-semibold">Telefone:</span> ${foneCliente}</li>
-                                        <li><span class="font-semibold">Benefício:</span> ${beneficio}</li>
-                                        <li><span class="font-semibold">Espécie:</span> ${especie}</li>
-                                        <li><span class="font-semibold">Idade:</span> ${idade}</li>
-                                        <li><span class="font-semibold">Salário Bruto:</span> R$ ${salario.toFixed(2)}</li>
-                                        <li><span class="font-semibold">Margem de Empréstimo:</span> R$ ${margemEmprestimo.toFixed(2)}</li>
-                                        <li><span class="font-semibold">Margem de Cartão:</span> R$ ${margemCartao.toFixed(2)}</li>
-                                        <li><span class="font-semibold">Banco:</span> ${banco}</li>
-                                        <li><span class="font-semibold">Agência:</span> ${agencia}</li>
-                                        <li><span class="font-semibold">Conta Corrente:</span> ${contaCorrente}</li>
-                                    </ul>
-                                </div>
-                                <div>
-                                    <h3 class="text-xl font-bold text-gray-700 mb-2">Ações Sugeridas</h3>
-                                    <ul class="list-disc pl-6 space-y-2 text-gray-600">
-                                        ${acoes.map(acao => `<li>${acao}</li>`).join('')}
-                                    </ul>
-                                    <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Totais Financeiros</h3>
-                                    <ul class="list-none space-y-2 text-gray-600">
-                                        <li><span class="font-semibold">Valor Emprestado Total:</span> R$ ${totalVlEmprestado.toFixed(2)}</li>
-                                        <li><span class="font-semibold">Parcelas Totais:</span> R$ ${parcelaTotal.toFixed(2)}</li>
-                                        <li><span class="font-semibold">Saldo Devedor Total:</span> R$ ${saldoTotal.toFixed(2)}</li>
-                                    </ul>
-                                </div>
-                            </div>
-
-                            ${htmlSimulacaoMargem}
-                            ${htmlSimulacaoCartoes}
-                            ${htmlSimulacaoRC}
-
-                            <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Análise de Contratos Individuais</h3>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                                ${htmlContratos}
-                                ${contratosDetalhes.length === 0 ? `
-                                    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-lg" role="alert">
-                                        <p class="font-bold">Aviso: Nenhum contrato encontrado</p>
-                                        <p>Verifique a formatação da sua tabela. O simulador espera uma estrutura como a do exemplo abaixo:</p>
-                                        <pre class="mt-2 p-2 bg-yellow-200 rounded-md text-sm text-yellow-800">
-123456 Banco Itaú 01/2022 15000,00 350,00 72 24 10000,00 1,75
-789012 Banco do Brasil 05/2021 8000,00 200,00 96 36 6000,00 1,65</pre>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        </div>
-                    `;
-                } catch (error) {
-                    console.error("Erro ao processar os dados:", error);
-                    resultadosDiv.innerHTML = `
-                        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg" role="alert">
-                            <p class="font-bold">Ocorreu um erro</p>
-                            <p>Não foi possível processar os dados. Por favor, verifique se a formatação está correta e tente novamente.</p>
-                        </div>
-                    `;
-                }
-            }, 500);
-        }
-    </script>
 </body>
-
 </html>
