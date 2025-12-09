@@ -244,61 +244,63 @@
                 });
             }
 
-
-            if (uploadForm) {
+if (uploadForm) {
                 uploadForm.addEventListener('submit', async (e) => {
-                    e.preventDefault();
-                    
+                    e.preventDefault(); // CRÍTICO: Previne a submissão padrão do formulário que recarrega a página
+
                     const uploadStatusEl = document.getElementById('uploadStatus');
                     uploadStatusEl.classList.remove('hidden');
+                    
+                    if (!window.isFirebaseReady) {
+                        uploadStatusEl.textContent = 'Erro: Firebase não conectado. Aguarde a mensagem "Plataforma pronta."';
+                        return;
+                    }
+
                     uploadStatusEl.textContent = 'A processar e carregar leads...';
-
-                    // Determina se um arquivo foi selecionado pelo usuário
-                    const fileSelected = csvFileEl && csvFileEl.files.length > 0;
-                    const selectedFileName = fileSelected ? csvFileEl.files[0].name : 'Leads de teste internos';
-
-                    // NOTA: Se fileSelected for true, a lógica para ler, parsear e usar
-                    // o conteúdo real do arquivo CSV/XLS seria implementada aqui.
                     
                     try {
-                        // Leads de teste (simulando upload)
+                        // --- PASSO 1: SIMULAÇÃO DE UPLOAD E ESCRITA NO FIRESTORE (Frontend) ---
                         const mockLeads = [
-                            { name: "José Alves", phone: "11988887777", bank: "itau", status: "call_pending" },
-                            { name: "Maria Clara", phone: "21977776666", bank: "bradesco", status: "call_pending" },
-                            { name: "Carlos Brito", phone: "31966665555", bank: "caixa", status: "call_pending" },
-                            { name: "Ana Souza", phone: "41955554444", bank: "santander", status: "answered" },
+                            { 'Nome Completo': "José Alves", 'Telefone': "11988887777", 'Cpf': "111", 'Matricula': "A1", 'Empregador': "ITAU", 'status': "call_pending" },
+                            { 'Nome Completo': "Maria Clara", 'Telefone': "21977776666", 'Cpf': "222", 'Matricula': "B2", 'Empregador': "BRADESCO", 'status': "call_pending" },
+                            { 'Nome Completo': "Carlos Brito", 'Telefone': "31966665555", 'Cpf': "333", 'Matricula': "C3", 'Empregador': "CAIXA", 'status': "call_pending" },
+                            { 'Nome Completo': "Ana Souza", 'Telefone': "41955554444", 'Cpf': "444", 'Matricula': "D4", 'Empregador': "SANTANDER", 'status': "answered" },
                         ];
 
-                        const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
+                        // Coleção/Documento que o Python lê: db.collection('leads_ativos').document('lista_atual')
+                        const docRef = doc(window.db, 'leads_ativos', 'lista_atual'); 
                         
-                        // Marca leads existentes como 'deleted'
-                        const currentLeadsSnapshot = await getDocs(leadsCollectionRef);
-                        const updatePromises = currentLeadsSnapshot.docs.map(doc => setDoc(doc.ref, { status: "deleted" }, { merge: true })); 
-                        await Promise.all(updatePromises);
+                        // Escreve os leads no Firestore
+                        await setDoc(docRef, {
+                            leads: mockLeads,
+                            timestamp: new Date().toISOString()
+                        }, { merge: false });
 
-                        // Adiciona novos leads
-                        for (const lead of mockLeads) {
-                            await addDoc(leadsCollectionRef, {
-                                ...lead,
-                                uploaderId: window.userId,
-                                timestamp: new Date().toISOString(),
-                                status: lead.status 
-                            });
-                        }
+                        uploadStatusEl.textContent = `${mockLeads.length} Leads de teste carregados com sucesso no Firestore.`;
+
+                        // --- PASSO 2: CHAMAR O SERVIDOR PYTHON PARA DISPARAR A LIGAÇÃO REAL ---
+                        uploadStatusEl.textContent = 'Leads carregados. A chamar o servidor Cloud Run para iniciar a ligação real...';
                         
-                        // Atualiza a mensagem de status com base na seleção do arquivo
-                        if (fileSelected) {
-                            uploadStatusEl.textContent = `O arquivo ${selectedFileName} foi selecionado! No entanto, a simulação iniciou com 4 Leads de Teste. A lógica de leitura de arquivos é o próximo passo.`;
+                        const serverResponse = await fetch('/disparar_chamada_server', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'start_call_cycle' }) 
+                        });
+
+                        const result = await serverResponse.json();
+
+                        if (serverResponse.ok) {
+                            uploadStatusEl.textContent = `SUCESSO! ${result.message}`;
+                            showMessage("Ligação real disparada! Verifique seu telefone.", false);
                         } else {
-                            uploadStatusEl.textContent = `${mockLeads.length} Leads de teste carregados com sucesso!`;
+                            // Se o servidor retornar 500, mostramos a mensagem de erro que o Python retornou
+                            uploadStatusEl.textContent = `ERRO NO SERVIDOR: ${result.message}`;
+                            showMessage(`Falha no Servidor ao disparar chamada: ${result.message}`, true);
                         }
-                        
-                        // Inicia a simulação se não estiver rodando (para os 'call_pending')
-                        if (!isUraRunning) startUraSimulation(); 
                         
                     } catch (error) {
-                        console.error("Erro ao carregar leads:", error);
-                        uploadStatusEl.textContent = 'Erro ao carregar leads. Verifique o console.';
+                        console.error("Erro no processo de disparo:", error);
+                        uploadStatusEl.textContent = 'Erro crítico ao carregar leads ou chamar servidor. Verifique o console.';
                     }
                 });
             }
@@ -1289,3 +1291,4 @@ Ex:
     </div>
 </body>
 </html>
+
