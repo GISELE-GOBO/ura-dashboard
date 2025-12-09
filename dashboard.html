@@ -8,39 +8,46 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script type="module">
+        // Reimportando todos os módulos do Firebase necessários
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, query, where, addDoc, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // Ativar logging de debug para o Firestore
+        // Ativar logging de debug
         setLogLevel('Debug');
 
-        // Variáveis globais (disponibilizadas pelo Canvas/Ambiente)
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // Variáveis globais
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
+        // --- ATENÇÃO: CONFIGURAÇÃO DE CREDENCIAIS DE CLIENTE (Obrigatório) ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAtFW6DsnU84YG67tvtWvB4lHWFgNRHGVo",
+            authDomain: "ura-dashboard.firebaseapp.com",
+            projectId: "ura-dashboard",
+            storageBucket: "ura-dashboard.firebasestorage.app",
+            messagingSenderId: "951470032643",
+            appId: "1:951470032643:web:1cb5f58943815a2db08b36"
+        };
+        // --- FIM DA SECÇÃO CRÍTICA ---
+
         window.app = null;
-        window.db = null;
         window.auth = null;
-        window.userId = null;
-        window.isFirebaseReady = false;
+        window.db = null; 
+        window.userId = null; 
+        window.isAppReady = false;
         let myChart = null;
-        let UraUnsubscribe = () => {};
-        let ClientUnsubscribe = () => {};
         let uraInterval;
         let isUraRunning = false;
+        let UraUnsubscribe = () => {};
+        let ClientUnsubscribe = () => {};
 
-        // Funções utilitárias
+        // --- Funções utilitárias ---
         const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
-        const formatPercent = (value) => (value * 100).toFixed(2) + '%';
-        // Função corrigida para limpar R$, pontos e usar vírgula como decimal
         const cleanCurrency = (text) => {
             if (typeof text !== 'string') return parseFloat(text) || 0;
             return parseFloat(text.replace(/[R$\.]/g, '').replace(',', '.')) || 0;
         };
         
-
         const showStatus = (message, isError = false) => {
             const statusMessageEl = document.getElementById('statusMessage');
             if (statusMessageEl) {
@@ -101,56 +108,109 @@
             }
         }
 
-        // --- FIREBASE INITIALIZATION AND AUTHENTICATION ---
-        const initializeFirebase = async () => {
-            showStatus("A iniciar a conexão com a base de dados...", false);
+        // --- APP INITIALIZATION (Firebase Only) ---
+        const startFirebaseApp = async () => { // Nome da função alterado
+            showStatus("A iniciar a plataforma e autenticar no Firebase...", false);
             
-            if (Object.keys(firebaseConfig).length === 0) {
-                 return; 
-            }
-
             try {
                 window.app = initializeApp(firebaseConfig);
                 window.auth = getAuth(window.app);
-                window.db = getFirestore(window.app);
+                window.db = getFirestore(window.app); 
+                
+                // Tentativa de Sign In Anônimo.
+                // Não precisa de await, pois o onAuthStateChanged irá capturar o resultado.
+                signInAnonymously(window.auth).catch(error => {
+                    console.error("Erro ao tentar autenticar anonimamente. Isso pode ser normal se o token for usado.", error);
+                });
 
-                onAuthStateChanged(window.auth, async (user) => {
+                // Este listener é o ponto de controle central
+                onAuthStateChanged(window.auth, (user) => {
                     if (user) {
                         window.userId = user.uid;
-                        document.getElementById('userIdDisplay').textContent = `ID do Usuário: ${window.userId}`;
-                        window.isFirebaseReady = true;
-                        
-                        setupDashboardListeners();
-                        setupClientListeners();
-                        showStatus("Plataforma pronta. Dashboard em tempo real iniciado.");
-                        
-                        const saveClientBtn = document.getElementById('saveClientBtn');
-                        if(saveClientBtn) {
-                            saveClientBtn.disabled = false;
-                            saveClientBtn.textContent = 'Salvar Cliente';
-                            saveClientBtn.classList.replace('bg-gray-400', 'bg-emerald-600');
-                            saveClientBtn.classList.replace('cursor-not-allowed', 'hover:bg-emerald-700');
-                        }
+                        document.getElementById('userIdDisplay').textContent = `ID do Usuário: ${window.userId} (Firebase)`;
+                        showStatus("Plataforma pronta. Conectado ao Firebase.");
                     } else {
-                        if (initialAuthToken) {
-                            signInWithCustomToken(window.auth, initialAuthToken).catch(error => {
-                                console.error("Erro ao autenticar com token customizado. Tentando anônimo...", error);
-                                signInAnonymously(window.auth).catch(err => showStatus("Erro ao autenticar.", true));
-                            });
-                        } else {
-                            signInAnonymously(window.auth).catch(error => showStatus("Erro ao autenticar.", true));
-                        }
+                         // Se a autenticação falhar, ainda definimos um ID para não travar a UI, mas alertamos.
+                        window.userId = 'UNAUTHENTICATED';
+                        document.getElementById('userIdDisplay').textContent = `ID do Usuário: ${window.userId}`;
+                        showStatus("AVISO: Falha na autenticação do Firebase. Funcionalidades de DB podem falhar.", true);
+                    }
+                    
+                    // A lógica de setup dos Listeners de DB já foi chamada em DOMContentLoaded
+                    window.isAppReady = true;
+
+                    const saveClientBtn = document.getElementById('saveClientBtn');
+                    if(saveClientBtn) {
+                        saveClientBtn.disabled = false;
+                        saveClientBtn.textContent = 'Salvar Cliente';
+                        saveClientBtn.classList.replace('bg-gray-400', 'bg-emerald-600');
+                        saveClientBtn.classList.replace('cursor-not-allowed', 'hover:bg-emerald-700');
                     }
                 });
+
             } catch (error) {
                 console.error("Erro fatal ao inicializar o Firebase:", error);
-                showStatus("Erro fatal: Não foi possível conectar à base de dados. Verifique a consola.", true);
+                showStatus("Erro fatal: Não foi possível inicializar o Firebase. Verifique a consola.", true);
+                window.isAppReady = true;
             }
         };
 
-        // --- DASHBOARD AND URA LOGIC (Firestore Read/Write) ---
+        // --- URA and Client Storage Helpers (Firebase Only) ---
         
-        // Função para atualizar o botão Iniciar/Em Execução
+        // Salva leads no Firebase
+        const saveLeads = async (leads) => {
+            if (!window.db) return false;
+
+            try {
+                const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
+                for (const lead of leads) {
+                    // Usa o CPF como ID do documento para upsert (setDoc)
+                    await setDoc(doc(leadsCollectionRef, lead.cpf), { ...lead, timestamp: new Date().toISOString() }, { merge: true });
+                }
+                return true;
+            } catch (error) {
+                console.error("ERRO CRÍTICO (WRITE): Falha ao salvar leads no Firebase. Verifique as regras de segurança.", error);
+                showStatus("ERRO CRÍTICO: Falha de escrita no Firebase. Verifique as regras de segurança.", true);
+                return false;
+            }
+        };
+        
+        // Salva cliente no Firebase
+        const saveClient = async (data) => {
+            if (!window.db || !window.userId || window.userId === 'UNAUTHENTICATED') return false;
+
+            try {
+                const clientCollectionPath = `artifacts/${appId}/users/${window.userId}/clients`;
+                await addDoc(collection(window.db, clientCollectionPath), data);
+                return true;
+            } catch (error) {
+                console.error("ERRO CRÍTICO (WRITE): Falha ao salvar cliente no Firebase. Verifique as regras de segurança.", error);
+                showMessage("ERRO CRÍTICO: Falha de escrita no Firebase. Verifique as regras de segurança.", true);
+                return false;
+            }
+        };
+        
+        // Busca cliente no Firebase
+        const searchClient = async (cpf) => {
+            if (!window.db || !window.userId || window.userId === 'UNAUTHENTICATED') return null;
+
+            try {
+                const clientCollectionPath = `artifacts/${appId}/users/${window.userId}/clients`;
+                const q = query(collection(window.db, clientCollectionPath), where("cpf", "==", cpf));
+                const querySnapshot = await getDocs(q);
+                
+                if (querySnapshot.empty) return null;
+                return querySnapshot.docs[0].data();
+            } catch (error) {
+                console.error("ERRO CRÍTICO (READ): Falha ao buscar cliente no Firebase. Verifique as regras de segurança.", error);
+                showMessage("ERRO: Falha de leitura no Firebase. Verifique as regras de segurança.", true);
+                return null;
+            }
+        };
+
+
+        // --- DASHBOARD LOGIC (Controller) ---
+        
         const updateUraButton = () => {
             const iniciarBtn = document.getElementById('iniciarBtn');
             if (!iniciarBtn) return;
@@ -165,24 +225,55 @@
                 iniciarBtn.textContent = 'Iniciar';
             }
         }
+        
+        // Atualiza as métricas e o gráfico a partir dos dados passados (usado pelo onSnapshot)
+        const updateDashboardMetrics = (leads) => {
+            let totalCalls = leads.length;
+            let answeredCalls = 0;
+            let unansweredCalls = 0;
+            let convertedCalls = 0;
+            let pendingCalls = 0;
 
+            leads.forEach(lead => {
+                if (lead.status === 'answered') {
+                    answeredCalls++;
+                } else if (lead.status === 'unanswered') {
+                    unansweredCalls++;
+                } else if (lead.status === 'converted') {
+                    convertedCalls++;
+                } else if (lead.status === 'call_pending') {
+                    pendingCalls++;
+                }
+            });
 
+            document.getElementById('totalCallsMetric').textContent = totalCalls;
+            document.getElementById('answeredCallsMetric').textContent = answeredCalls;
+            document.getElementById('unansweredCallsMetric').textContent = unansweredCalls + pendingCalls; 
+            
+            updateChart(answeredCalls, unansweredCalls, convertedCalls);
+            
+            // Verifica se a simulação deve parar
+            if (isUraRunning && pendingCalls === 0) {
+                 stopUraSimulation();
+                 showStatus('Simulação concluída: Todos os leads foram processados.', false);
+            }
+        }
+        
+        // Funções de URA
         const startUraSimulation = () => {
             if (isUraRunning) return;
-            if (!window.isFirebaseReady) {
-                showStatus("Firebase não está pronto. Por favor, aguarde a conexão.", true);
+            if (!window.db || !window.userId || window.userId === 'UNAUTHENTICATED') {
+                showStatus("ERRO: Firebase não conectado ou usuário não autenticado. A URA não pode iniciar.", true);
                 return;
             }
 
             isUraRunning = true;
-            updateUraButton(); // Atualiza o botão para "Em Execução"
+            updateUraButton(); 
             showStatus('Campanha URA Iniciada. Simulação em andamento...');
-            
-            const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
             
             uraInterval = setInterval(async () => {
                 try {
-                    // Busca apenas leads com status 'call_pending'
+                    const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
                     const q = query(leadsCollectionRef, where("status", "==", "call_pending"));
                     const querySnapshot = await getDocs(q);
 
@@ -191,24 +282,22 @@
                         stopUraSimulation();
                         return;
                     }
-
-                    // Seleciona um lead aleatório entre os pendentes
+                    
                     const leadDoc = querySnapshot.docs[Math.floor(Math.random() * querySnapshot.docs.length)];
-                    // 70% de chance de ser atendido, 30% não
+                    const leadData = leadDoc.data();
                     const newStatus = Math.random() < 0.7 ? 'answered' : 'unanswered'; 
-
-                    // Atualiza o status do lead no Firestore
+                    
+                    // Atualiza no Firebase (o onSnapshot cuidará da atualização do dashboard)
                     await setDoc(doc(window.db, `artifacts/${appId}/public/data/ura_leads`, leadDoc.id), {
                         status: newStatus,
                         lastCallTime: new Date().toISOString(),
-                        // Mantém outros dados do lead
-                        ...leadDoc.data() 
                     }, { merge: true });
 
-                    showStatus(`Ligando para ${leadDoc.data().name}. Status: ${newStatus === 'answered' ? 'Atendido!' : 'Não Atendido.'}`);
+                    showStatus(`Ligando para ${leadData.name}. Status: ${newStatus === 'answered' ? 'Atendido!' : 'Não Atendido.'}`);
 
                 } catch (error) {
-                    console.error("Erro na simulação URA:", error);
+                    console.error("ERRO CRÍTICO: Falha na simulação URA (interval). Verifique as regras de segurança.", error);
+                    showStatus("ERRO CRÍTICO: Falha de leitura/escrita no Firebase. Verifique as regras de segurança.", true);
                     stopUraSimulation();
                 }
             }, 3000); 
@@ -218,22 +307,54 @@
             if (!isUraRunning) return;
             isUraRunning = false;
             clearInterval(uraInterval);
-            updateUraButton(); // Atualiza o botão para "Iniciar"
-            showStatus('Campanha URA Parada. Clique em Iniciar para continuar.');
+            updateUraButton(); 
+            showStatus('Campanha URA Parada. Clique em Carregar Leads e Iniciar para continuar.');
         };
-        
-        function setupDashboardListeners() {
-            if (!window.isFirebaseReady || !window.userId) return;
 
-            // Adiciona listeners para os botões de controle da URA
+        // =======================================================
+        // FUNÇÃO GLOBAL DE DISPARO DE LEADS 
+        // =======================================================
+        window.dispararLeads = async function(e) {
+            if (e) e.preventDefault(); 
+
+            const uploadStatusEl = document.getElementById('uploadStatus');
+            uploadStatusEl.classList.remove('hidden');
+            
+            if (!window.db || window.userId === 'UNAUTHENTICATED') {
+                uploadStatusEl.textContent = 'Erro: Firebase não conectado ou autenticação falhou.';
+                return;
+            }
+
+            uploadStatusEl.textContent = 'A processar e carregar leads no Firebase...';
+            
+            const mockLeads = [
+                { name: "José Alves", phone: "11988887777", cpf: "111", matricula: "A1", empregador: "ITAU", status: "call_pending" },
+                { name: "Maria Clara", phone: "21977776666", cpf: "222", matricula: "B2", empregador: "BRADESCO", status: "call_pending" },
+                { name: "Carlos Brito", phone: "31966665555", cpf: "333", matricula: "C3", empregador: "CAIXA", status: "call_pending" },
+                { name: "Ana Souza", phone: "41955554444", cpf: "444", matricula: "D4", empregador: "SANTANDER", status: "call_pending" },
+                { name: "Roberto Dias", phone: "51933332222", cpf: "555", matricula: "E5", empregador: "BANCO DO BRASIL", status: "call_pending" },
+                { name: "Luciana Lima", phone: "61922221111", cpf: "666", matricula: "F6", empregador: "ITAU", status: "call_pending" },
+            ];
+            
+            const success = await saveLeads(mockLeads);
+
+            if (success) {
+                uploadStatusEl.textContent = `${mockLeads.length} Leads carregados com sucesso no Firebase.`;
+                
+                if (!isUraRunning) {
+                    startUraSimulation();
+                }
+            } else {
+                uploadStatusEl.textContent = 'Erro crítico ao carregar leads no Firebase. Verifique as regras de segurança.';
+            }
+        };
+
+        function setupDashboardLogic() {
+            // Inicializa a lógica do Dashboard e listeners de botões (AGORA SÃO CHAMADOS EM DOMContentLoaded)
             document.getElementById('iniciarBtn').addEventListener('click', startUraSimulation);
             document.getElementById('pararBtn').addEventListener('click', stopUraSimulation);
             
-            // 1. Leads Upload (Simulated)
-            const uploadForm = document.getElementById('uploadForm');
-            const csvFileEl = document.getElementById('csv_file'); // Obtém o elemento de input de arquivo
-
-            // Adiciona listener para atualizar o texto do botão/label com o nome do arquivo selecionado
+            const csvFileEl = document.getElementById('csv_file'); 
             if (csvFileEl) {
                 csvFileEl.addEventListener('change', function() {
                     const fileLabelTextEl = document.getElementById('fileLabelText');
@@ -243,110 +364,28 @@
                     }
                 });
             }
-
-if (uploadForm) {
-                uploadForm.addEventListener('submit', async (e) => {
-                    e.preventDefault(); // CRÍTICO: Previne a submissão padrão do formulário que recarrega a página
-
-                    const uploadStatusEl = document.getElementById('uploadStatus');
-                    uploadStatusEl.classList.remove('hidden');
-                    
-                    if (!window.isFirebaseReady) {
-                        uploadStatusEl.textContent = 'Erro: Firebase não conectado. Aguarde a mensagem "Plataforma pronta."';
-                        return;
-                    }
-
-                    uploadStatusEl.textContent = 'A processar e carregar leads...';
-                    
-                    try {
-                        // --- PASSO 1: SIMULAÇÃO DE UPLOAD E ESCRITA NO FIRESTORE (Frontend) ---
-                        const mockLeads = [
-                            { 'Nome Completo': "José Alves", 'Telefone': "11988887777", 'Cpf': "111", 'Matricula': "A1", 'Empregador': "ITAU", 'status': "call_pending" },
-                            { 'Nome Completo': "Maria Clara", 'Telefone': "21977776666", 'Cpf': "222", 'Matricula': "B2", 'Empregador': "BRADESCO", 'status': "call_pending" },
-                            { 'Nome Completo': "Carlos Brito", 'Telefone': "31966665555", 'Cpf': "333", 'Matricula': "C3", 'Empregador': "CAIXA", 'status': "call_pending" },
-                            { 'Nome Completo': "Ana Souza", 'Telefone': "41955554444", 'Cpf': "444", 'Matricula': "D4", 'Empregador': "SANTANDER", 'status': "answered" },
-                        ];
-
-                        // Coleção/Documento que o Python lê: db.collection('leads_ativos').document('lista_atual')
-                        const docRef = doc(window.db, 'leads_ativos', 'lista_atual'); 
-                        
-                        // Escreve os leads no Firestore
-                        await setDoc(docRef, {
-                            leads: mockLeads,
-                            timestamp: new Date().toISOString()
-                        }, { merge: false });
-
-                        uploadStatusEl.textContent = `${mockLeads.length} Leads de teste carregados com sucesso no Firestore.`;
-
-                        // --- PASSO 2: CHAMAR O SERVIDOR PYTHON PARA DISPARAR A LIGAÇÃO REAL ---
-                        uploadStatusEl.textContent = 'Leads carregados. A chamar o servidor Cloud Run para iniciar a ligação real...';
-                        
-                        const serverResponse = await fetch('/disparar_chamada_server', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'start_call_cycle' }) 
-                        });
-
-                        const result = await serverResponse.json();
-
-                        if (serverResponse.ok) {
-                            uploadStatusEl.textContent = `SUCESSO! ${result.message}`;
-                            showMessage("Ligação real disparada! Verifique seu telefone.", false);
-                        } else {
-                            // Se o servidor retornar 500, mostramos a mensagem de erro que o Python retornou
-                            uploadStatusEl.textContent = `ERRO NO SERVIDOR: ${result.message}`;
-                            showMessage(`Falha no Servidor ao disparar chamada: ${result.message}`, true);
-                        }
-                        
-                    } catch (error) {
-                        console.error("Erro no processo de disparo:", error);
-                        uploadStatusEl.textContent = 'Erro crítico ao carregar leads ou chamar servidor. Verifique o console.';
-                    }
-                });
+            
+            // Tenta configurar o Listener do Firebase (somente se o DB estiver pronto após o initializeApp)
+            if(window.db && window.userId && window.userId !== 'UNAUTHENTICATED') {
+                 const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
+                
+                 UraUnsubscribe = onSnapshot(leadsCollectionRef, (snapshot) => {
+                     const leads = snapshot.docs.map(doc => doc.data());
+                     updateDashboardMetrics(leads);
+                 }, (error) => {
+                     console.error("ERRO CRÍTICO (READ): Falha no onSnapshot. Verifique as regras de segurança.", error);
+                     showStatus("ERRO CRÍTICO: Falha de leitura em tempo real. Verifique as regras de segurança.", true);
+                     UraUnsubscribe(); 
+                     // Exibe 0 se a leitura falhar
+                     updateDashboardMetrics([]); 
+                 });
+            } else {
+                // Exibe 0 se o Firebase não estiver pronto na inicialização do DOM
+                updateDashboardMetrics([]);
             }
-
-            // 2. Real-time Dashboard Listener
-            const leadsCollectionRef = collection(window.db, `artifacts/${appId}/public/data/ura_leads`);
-            UraUnsubscribe = onSnapshot(leadsCollectionRef, (snapshot) => {
-                let totalCalls = 0;
-                let answeredCalls = 0;
-                let unansweredCalls = 0;
-                let convertedCalls = 0;
-                
-                snapshot.forEach(doc => {
-                    const lead = doc.data();
-                    if (lead.status !== 'deleted') { // Ignora leads marcados para exclusão
-                        totalCalls++;
-                        if (lead.status === 'answered') {
-                            answeredCalls++;
-                        } else if (lead.status === 'unanswered') {
-                            unansweredCalls++;
-                        } else if (lead.status === 'converted') {
-                            convertedCalls++;
-                        }
-                    }
-                });
-
-                document.getElementById('totalCallsMetric').textContent = totalCalls;
-                document.getElementById('answeredCallsMetric').textContent = answeredCalls;
-                document.getElementById('unansweredCallsMetric').textContent = unansweredCalls;
-                
-                updateChart(answeredCalls, unansweredCalls, convertedCalls);
-                
-                // Verifica se todos os leads pendentes foram processados para parar a simulação
-                const pendingLeads = snapshot.docs.filter(doc => doc.data().status === 'call_pending').length;
-                if (isUraRunning && pendingLeads === 0) {
-                     stopUraSimulation();
-                     showStatus('Simulação concluída: Todos os leads foram processados.', false);
-                }
-                
-            }, (error) => {
-                console.error("Erro ao carregar dados do Dashboard:", error);
-                showStatus("Erro de conexão com o Dashboard em tempo real.", true);
-            });
         }
 
-        // --- SDR IA LOGIC (Gemini API) ---
+        // --- SDR IA LOGIC (Gemini API - inalterada) ---
         document.getElementById('sdrForm').addEventListener('submit', (e) => {
             e.preventDefault();
             generateSDRScript();
@@ -421,7 +460,7 @@ if (uploadForm) {
             }
         }
 
-        // --- SIMULADOR DE ROTAS URA ---
+        // --- SIMULADOR DE ROTAS URA (inalterada) ---
         const bankRoutes = {
             itau: "URA Itaú: 4004-4828 -> 9 (Outros Assuntos) -> 2 (Cartões) -> 1 (Atendente).",
             santander: "URA Santander: 4004-3535 -> Digitar CPF -> 9 (Falar c/ Atendente) -> 3 (Contratos/Serviços).",
@@ -459,14 +498,33 @@ if (uploadForm) {
             `;
         });
 
-        // --- CLIENT ANALYSIS LOGIC (Firestore Read/Write Private) ---
+        // --- CLIENT ANALYSIS LOGIC (Controller) ---
+        
+        // Atualiza a lista de clientes na UI
+        const updateClientList = (clients) => {
+            const clientListEl = document.getElementById('clientList');
+            if (!clientListEl) return;
+            clientListEl.innerHTML = '';
+                
+            if (clients.length === 0) {
+                clientListEl.innerHTML = '<li class="text-gray-500 italic">Nenhum cliente salvo ainda.</li>';
+                return;
+            }
 
-        function setupClientListeners() {
-            if (!window.isFirebaseReady || !window.userId) return;
-
-            const clientCollectionPath = `artifacts/${appId}/users/${window.userId}/clients`;
-            const clientCollectionRef = collection(window.db, clientCollectionPath);
-
+            clients.forEach(client => {
+                const li = document.createElement('li');
+                li.className = 'flex justify-between items-center p-3 bg-white rounded-lg shadow-sm border border-emerald-100 hover:shadow-md transition';
+                li.innerHTML = `
+                    <span class="font-medium text-gray-800">${client.name}</span>
+                    <span class="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                        ${new Date(client.contractDate).toLocaleDateString('pt-BR')}
+                    </span>
+                `;
+                clientListEl.appendChild(li);
+            });
+        }
+        
+        function setupClientLogic() {
             // 1. Client Form Submission (Save)
             const clientForm = document.getElementById('clientForm');
             if(clientForm) {
@@ -480,22 +538,23 @@ if (uploadForm) {
                     recontactDate.setMonth(recontactDate.getMonth() + 1); // 1 mês após o contrato
 
                     const data = {
+                        id: crypto.randomUUID(), 
                         name: document.getElementById('clientName').value,
                         cpf: document.getElementById('clientCpf').value.replace(/\D/g, ''), 
                         benefitNumber: document.getElementById('clientBenefitNumber').value,
                         address: document.getElementById('clientAddress').value,
                         phone: document.getElementById('clientPhone').value,
                         contractDate: contractDateValue,
-                        createdAt: new Date().toISOString(), // Salva como string ISO
-                        recontactDue: recontactDate.toISOString() // Salva como string ISO
+                        createdAt: new Date().toISOString(), 
+                        recontactDue: recontactDate.toISOString() 
                     };
 
-                    try {
-                        await addDoc(clientCollectionRef, data);
+                    const success = await saveClient(data);
+                    
+                    if (success) {
                         showMessage("Cliente salvo com sucesso!", false);
                         e.target.reset();
-                    } catch (error) {
-                        console.error("Erro ao salvar cliente:", error);
+                    } else {
                         showMessage("Erro ao salvar cliente. Verifique o console.", true);
                     }
                 });
@@ -516,72 +575,52 @@ if (uploadForm) {
 
                     clientDetailsEl.innerHTML = '<span class="text-blue-500 font-bold animate-pulse">Buscando cliente...</span>';
 
-                    try {
-                        const q = query(clientCollectionRef, where("cpf", "==", searchCpf));
-                        const querySnapshot = await getDocs(q);
+                    const clientData = await searchClient(searchCpf);
 
-                        if (querySnapshot.empty) {
-                            clientDetailsEl.innerHTML = `<span class="text-orange-500">Nenhum cliente encontrado com o CPF: ${searchCpf}.</span>`;
-                            return;
-                        }
-
-                        const clientData = querySnapshot.docs[0].data();
-                        
-                        // As datas são salvas como string ISO no Firestore
-                        const recontactDate = new Date(clientData.recontactDue);
-                        
-                        clientDetailsEl.innerHTML = `
-                            <h4 class="font-extrabold text-lg text-emerald-700">${clientData.name}</h4>
-                            <p><strong>CPF:</strong> ${clientData.cpf}</p>
-                            <p><strong>Benefício:</strong> ${clientData.benefitNumber || 'N/A'}</p>
-                            <p><strong>Telefone:</strong> ${clientData.phone}</p>
-                            <p><strong>Endereço:</strong> ${clientData.address}</p>
-                            <p class="mt-4 p-2 bg-yellow-100 rounded-lg">
-                                <strong>Contrato Finalizado em:</strong> ${new Date(clientData.contractDate).toLocaleDateString('pt-BR')}
-                            </p>
-                            <p class="font-bold text-green-700 mt-2">
-                                Sugestão de Recontacto: ${recontactDate.toLocaleDateString('pt-BR')}
-                            </p>
-                        `;
-
-                    } catch (error) {
-                        console.error("Erro ao buscar cliente:", error);
-                        clientDetailsEl.innerHTML = '<span class="text-red-500">Erro ao buscar cliente.</span>';
+                    if (!clientData) {
+                        clientDetailsEl.innerHTML = `<span class="text-orange-500">Nenhum cliente encontrado com o CPF: ${searchCpf}.</span>`;
+                        return;
                     }
+                    
+                    // As datas são salvas como string ISO
+                    const recontactDate = new Date(clientData.recontactDue);
+                    
+                    clientDetailsEl.innerHTML = `
+                        <h4 class="font-extrabold text-lg text-emerald-700">${clientData.name}</h4>
+                        <p><strong>CPF:</strong> ${clientData.cpf}</p>
+                        <p><strong>Benefício:</strong> ${clientData.benefitNumber || 'N/A'}</p>
+                        <p><strong>Telefone:</strong> ${clientData.phone}</p>
+                        <p><strong>Endereço:</strong> ${clientData.address}</p>
+                        <p class="mt-4 p-2 bg-yellow-100 rounded-lg">
+                            <strong>Contrato Finalizado em:</strong> ${new Date(clientData.contractDate).toLocaleDateString('pt-BR')}
+                        </p>
+                        <p class="font-bold text-green-700 mt-2">
+                            Sugestão de Recontacto: ${recontactDate.toLocaleDateString('pt-BR')}
+                        </p>
+                    `;
                 });
             }
 
-            // 3. Client List Listener (Real-time update)
-            ClientUnsubscribe = onSnapshot(clientCollectionRef, (snapshot) => {
-                const clientListEl = document.getElementById('clientList');
-                if (!clientListEl) return;
-                clientListEl.innerHTML = '';
-                
-                if (snapshot.empty) {
-                    clientListEl.innerHTML = '<li class="text-gray-500 italic">Nenhum cliente salvo ainda.</li>';
-                    return;
-                }
-
-                snapshot.forEach(doc => {
-                    const client = doc.data();
-                    const li = document.createElement('li');
-                    li.className = 'flex justify-between items-center p-3 bg-white rounded-lg shadow-sm border border-emerald-100 hover:shadow-md transition';
-                    li.innerHTML = `
-                        <span class="font-medium text-gray-800">${client.name}</span>
-                        <span class="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-                            ${new Date(client.contractDate).toLocaleDateString('pt-BR')}
-                        </span>
-                    `;
-                    clientListEl.appendChild(li);
-                });
-            }, (error) => {
-                console.error("Erro ao carregar lista de clientes:", error);
-                document.getElementById('clientList').innerHTML = '<li class="text-red-500 italic">Erro ao carregar dados.</li>';
-            });
+            // 3. Client List Listener (Firebase)
+            if(window.db && window.userId && window.userId !== 'UNAUTHENTICATED') {
+                 const clientCollectionPath = `artifacts/${appId}/users/${window.userId}/clients`;
+                 
+                 ClientUnsubscribe = onSnapshot(collection(window.db, clientCollectionPath), (snapshot) => {
+                     const clients = snapshot.docs.map(doc => doc.data());
+                     updateClientList(clients);
+                 }, (error) => {
+                     console.error("ERRO CRÍTICO (READ): Falha no onSnapshot de clientes. Verifique as regras de segurança.", error);
+                     showMessage("ERRO CRÍTICO: Falha de leitura de clientes. Verifique as regras de segurança.", true);
+                     ClientUnsubscribe(); 
+                     updateClientList([]); // Limpa a lista se falhar
+                 });
+            } else {
+                updateClientList([]);
+            }
         }
 
 
-        // --- LEAD SIMULATOR CORE LOGIC (Processar Lead) ---
+        // --- LEAD SIMULATOR CORE LOGIC (Processar Lead - inalterada) ---
 
         function calculateLeadPotential(installmentsPaid, totalInstallments, installmentValue, originalTax, newCoeficiente) {
             
@@ -625,7 +664,7 @@ if (uploadForm) {
             const cpf = extractMatch(/CPF:\s*(.*)/i);
             const foneCliente = extractMatch(/Fone Cliente:\s*(.*)/i);
             const beneficio = extractMatch(/Beneficio:\s*(.*)/i);
-            const especie = extractMatch(/Espécie:\s*(.*)/i);
+            const especie = extractMatch( /Espécie:\s*(.*)/i);
             const dataNascimentoStr = extractMatch(/Data Nascimento:\s*([\d\/]+)/i);
 
             let idade = 'Não informada';
@@ -703,7 +742,6 @@ if (uploadForm) {
                 const leadData = parseLeadData(textoLead);
                 const contracts = parseContracts(textoContratos);
                 
-                // Coeficientes de referência (para análise interna, já que usamos o novoCoeficiente para simular o potencial)
                 const coeficienteRefin = 0.02300; 
                 
                 let parcelaTotal = 0;
@@ -717,7 +755,6 @@ if (uploadForm) {
                     const vlParcela = contract.installment;
                     const saldo = contract.remainingValue;
                     
-                    // Cálculo do potencial usando a função de cálculo
                     const potential = calculateLeadPotential(
                         contract.installmentsPaid, contract.totalTerms, vlParcela, contract.originalTax, novoCoeficiente
                     );
@@ -740,14 +777,12 @@ if (uploadForm) {
                 
                 let simulacaoMargem = null;
                 if (leadData.margem_emprestimo > 0) {
-                    // Valor liberado com 84x (prazo comum)
                     const valorLiberado = leadData.margem_emprestimo / novoCoeficiente * 84;
                     simulacaoMargem = { parcela: leadData.margem_emprestimo, valorLiberado: valorLiberado };
                 }
 
                 let simulacaoRC = null;
                 if (parcelaTotal > 0 && !isNaN(novoCoeficiente) && novoCoeficiente > 0) {
-                    // Valor Máximo de Empréstimo usando a Parcela Total e o Novo Coeficiente
                     const maxLoan = (parcelaTotal / novoCoeficiente) * 84; 
                     const valorLiberado = maxLoan - saldoTotal;
                     simulacaoRC = {
@@ -882,7 +917,7 @@ if (uploadForm) {
                                 ${htmlSimulacaoRC}
                             </div>
                             <div>
-                                <h3 class="text-xl font-bold text-gray-700 mb-2">Plano de Ação</h3>
+                                <h3 class="text-xl font-bold text-gray-700 mb-2">Plano de Ação </h3>
                                 <ul class="list-disc pl-6 space-y-2 text-gray-600">
                                     ${acoes.map(acao => `<li>${acao}</li>`).join('')}
                                 </ul>
@@ -950,7 +985,12 @@ if (uploadForm) {
         document.addEventListener('DOMContentLoaded', () => {
             setupTabs();
             updateChart(0, 0, 0); // Inicializa o chart
-            initializeFirebase(); // Inicia o Firebase (que irá chamar os Listeners após o login)
+            
+            // CORREÇÃO: Anexa os event listeners dos botões imediatamente
+            setupDashboardLogic(); 
+            setupClientLogic(); 
+
+            startFirebaseApp(); // Inicia o App (que irá tentar o Firebase e atualizar o estado do DB)
         });
         
     </script>
@@ -1011,7 +1051,7 @@ if (uploadForm) {
                 </nav>
             </div>
 
-            <!-- Dashboard URA (Corrigido para ser visível por padrão e ter o log de status no lugar certo) -->
+            <!-- Dashboard URA -->
             <div id="content-dashboard" class="mt-8">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="flex flex-col gap-6">
@@ -1033,23 +1073,23 @@ if (uploadForm) {
                             </div>
                         </div>
                         
-                        <!-- BLOCO: CARREGAMENTO DE LEADS (RESTAURADO COM CAMPO DE ARQUIVO SIMULADO E MELHOR FEEDBACK) -->
+                        <!-- BLOCO: CARREGAMENTO DE LEADS -->
                         <div class="bg-blue-50 p-6 rounded-2xl shadow-inner">
-                            <h2 class="text-xl font-semibold text-blue-900 mb-4">Carregar Leads (Simulado)</h2>
+                            <h2 class="text-xl font-semibold text-blue-900 mb-4">Carregar Leads</h2>
                             <form id="uploadForm" class="flex flex-col sm:flex-row items-center justify-center gap-4">
                                 <label for="csv_file" id="fileLabel" class="flex-1 cursor-pointer bg-blue-100 hover:bg-blue-200 transition duration-300 text-blue-700 px-4 py-3 rounded-xl font-medium shadow-sm text-center">
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M.5 4a.5.5 0 0 1 .5-.5h.5a.5.5 0 0 1 .5.5V13a.5.5 0 0 1-1 0V4z" clip-rule="evenodd" /></svg>
                                     <span id="fileLabelText">Escolher Arquivo CSV/XLS</span>
                                     <input type="file" name="csv_file" class="hidden" id="csv_file" accept=".csv, .xls, .xlsx" />
                                 </label>
-                                <button type="submit" id="uploadBtn" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
+                                <!-- O botão CHAMA a função global corrigida que não estava definida. -->
+                                <button type="button" onclick="dispararLeads(event)" id="uploadBtn" class="bg-blue-600 hover:bg-blue-700 transition duration-300 text-white px-6 py-3 rounded-xl font-semibold shadow-md">
                                     Carregar Leads
                                 </button>
                             </form>
                             <p id="uploadStatus" class="mt-4 text-sm text-blue-600 font-semibold hidden animate-pulse"></p>
                         </div>
-                        <!-- FIM DO BLOCO -->
-
+                        
                         <div class="bg-gray-50 p-6 rounded-2xl shadow-inner text-left">
                             <h2 class="text-xl font-semibold text-gray-900 mb-4">Log de Status</h2>
                             <p id="statusMessage" class="text-gray-600 text-sm italic">
@@ -1089,6 +1129,7 @@ if (uploadForm) {
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                         <div>
                             <form id="sdrForm" class="flex flex-col gap-4">
+                                <h3 class="text-lg font-bold text-gray-900">Gerar Roteiro</h3>
                                 <div class="flex flex-col">
                                     <label for="leadName" class="text-sm font-medium text-gray-700">Nome do Lead:</label>
                                     <input type="text" id="leadName" class="mt-1 p-3 border border-gray-300 rounded-lg focus:ring focus:ring-blue-200" placeholder="Ex: João Silva">
@@ -1149,7 +1190,7 @@ if (uploadForm) {
                                     <option value="qualibank">QualiBank</option>
                                     <option value="bancohappy">Banco Happy</option>
                                     <option value="brb">Banco BRB</option>
-                                    <option value="picpay">Banco PicPay</option>
+                                    <option value="picpay">URA PicPay</option>
                                     <option value="banrisul">Banrisul</option>
                                     <option value="digio">Banco Digio</option>
                                 </select>
@@ -1159,7 +1200,7 @@ if (uploadForm) {
                             </div>
                         </div>
                         <div class="bg-gray-50 p-6 rounded-2xl shadow-inner overflow-y-auto max-h-96">
-                            <h3 class="text-lg font-bold text-gray-900 mb-2">Log da Simulação:</h3>
+                            <h3 class="text-lg font-bold text-gray-900 mb-2">Log da Simulação: </h3>
                             <div id="simulatorLog" class="text-gray-700 text-sm leading-relaxed italic">
                                 Selecione um banco e clique em "Iniciar Simulação" para começar.
                             </div>
@@ -1291,4 +1332,3 @@ Ex:
     </div>
 </body>
 </html>
-
