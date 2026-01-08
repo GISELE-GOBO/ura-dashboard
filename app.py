@@ -70,7 +70,7 @@ except KeyError as e:
 
 # Globais
 discagem_ativa = False
-AUDIO_INICIAL_FILENAME = 'audio_portabilidadeexclusiva.mp3'
+AUDIO_INICIAL_FILENAME = 'audio_aumento_salario.mp3'
 AUDIO_CONTINUAR_FILENAME = 'audio_continuarinbursa.mp3'
 
 app = Flask(__name__, static_url_path='/static', template_folder='templates')
@@ -124,18 +124,23 @@ def upload_leads():
         return jsonify({"success": False, "message": "Nenhum arquivo selecionado."}), 400
     try:
         df = pd.read_csv(file, dtype=str)
+        # AJUSTE: Validação para colunas do seu CSV (Nome Completo e Telefone obrigatórios)
         if 'Nome Completo' not in df.columns or 'Telefone' not in df.columns:
-            return jsonify({"success": False, "message": "Colunas obrigatórias faltando (Nome Completo e Telefone)."}), 400
+            return jsonify({"success": False, "message": "Colunas obrigatórias faltando ('Nome Completo' e 'Telefone'). Verifique o CSV."}), 400
+        # Colunas opcionais (CPF, Matricula, Empregador) — preenche com 'N/A' se faltar
+        for col in ['Cpf', 'Matricula', 'Empregador']:
+            if col not in df.columns:
+                df[col] = 'N/A'
         leads_list = df.to_dict('records')
-        global leads_para_chamar  # Declara global
-        leads_para_chamar = leads_list  # Atribui os leads para discagem
+        global leads_para_chamar  # Declara global para discagem
+        leads_para_chamar = leads_list  # Atribui os leads
         # Salva no Firestore
         db.collection("leads_ativos").document("lista_atual").set({
             "leads": leads_list,
             "quantidade": len(leads_list),
             "timestamp": datetime.now().isoformat()
         })
-        logger.info(f"Upload OK: {len(leads_list)} leads")
+        logger.info(f"Upload OK: {len(leads_list)} leads salvos")
         return jsonify({"success": True, "message": f"Lista carregada! Total de {len(leads_list)} leads."})
     except Exception as e:
         logger.error(f"Upload error: {e}")
@@ -178,21 +183,21 @@ def fazer_chamadas(leads):
             break
         try:
             phone = clean_and_format_phone(lead['Telefone'])
-            final_phone = f"+{phone}"
+            final_phone = f"+{phone}"  # NOVA LINHA: Define final_phone
             # PREPARA DADOS DO LEAD PARA URL
             lead_data_for_url = {
                 'telefone': phone,
-                'nome': lead.get('Nome Completo', 'Cliente'),
-                'cpf': lead.get('Cpf', 'N/A'),
-                'matricula': lead.get('Matricula', 'N/A'),
-                'empregador': lead.get('Empregador', 'N/A')
+                'nome': lead.get('Nome Completo', 'Cliente'),  # CORRETO: 'Nome Completo' do CSV
+                'cpf': lead.get('Cpf', 'N/A'),  # CORRETO: 'Cpf' do CSV
+                'matricula': lead.get('Matricula', 'N/A'),  # CORRETO: 'Matricula' do CSV
+                'empregador': lead.get('Empregador', 'N/A')  # CORRETO: 'Empregador' do CSV
             }
             encoded_lead_data = quote(json.dumps(lead_data_for_url))
             logger.info(f"Calling {lead_data_for_url['nome']} at {final_phone}")
             call = client.calls.create(
                 to=final_phone,
                 from_=twilio_number,
-                url=f"{base_url}/gather?lead_data={encoded_lead_data}",  # NOVA: Adiciona lead_data
+                url=f"{base_url}/gather?lead_data={encoded_lead_data}",
                 method="GET"
             )
             logger.info(f"Call SID: {call.sid}")
@@ -200,7 +205,7 @@ def fazer_chamadas(leads):
         except Exception as e:
             logger.error(f"Call error: {e}")
     discagem_ativa = False
-
+    
 @app.route('/gather', methods=['GET', 'POST'])
 def gather():
     response = VoiceResponse()
